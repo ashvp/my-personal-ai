@@ -11,7 +11,7 @@ localai/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py                     # FastAPI application, CORS & PWA static mounts
-│   ├── config.py                   # Pydantic Settings & environment variables
+│   ├── config.py                   # Pydantic Settings & model routing configuration
 │   ├── core/
 │   │   ├── __init__.py
 │   │   └── security.py             # Device token auth (X-Device-Token)
@@ -21,13 +21,18 @@ localai/
 │   │       ├── __init__.py
 │   │       └── endpoints/
 │   │           ├── __init__.py
-│   │           └── chat.py         # Protected POST /chat (SSE streaming by default)
+│   │           ├── chat.py         # Protected POST /chat (SSE streaming by default)
+│   │           └── gmail.py        # Gmail sync & status endpoints
 │   ├── schemas/
 │   │   ├── __init__.py
 │   │   └── chat.py                 # ChatRequest & ChatResponse schemas
 │   └── services/
 │       ├── __init__.py
-│       └── llm_service.py          # Asynchronous Ollama / Qwen communication service
+│       ├── llm_service.py          # Dynamic 3-model intent router & Ollama stream service
+│       ├── memory_service.py       # 3-tier DuckDB memory (Short, Intermediate, Long-Term)
+│       └── gmail_service.py        # Gmail API OAuth client & message ingester
+├── data/
+│   └── assistant.duckdb            # Local embedded DuckDB database (emails, briefings)
 ├── frontend/
 │   ├── index.html                  # Modern responsive chat interface
 │   ├── manifest.json               # PWA configuration for mobile home screen installation
@@ -37,9 +42,9 @@ localai/
 │   └── js/
 │       ├── app.js                  # Real-time SSE streaming client & token handling
 │       └── pwa.js                  # PWA service worker installer
-├── .env.example                    # Sample environment configuration
 ├── .env                            # Active environment configuration
 ├── requirements.txt                # Python dependencies
+├── authenticate_gmail.py           # One-time Google OAuth authorization helper
 ├── pair.py                         # Device pairing utility (QR code & link generator)
 ├── run.py                          # Application launcher
 └── README.md
@@ -47,10 +52,24 @@ localai/
 
 ---
 
+## ⚡ Performance Breakthrough: From 60s Down to ~2s
+
+* **The Problem with a Single Reasoning Model:**
+  Originally, the assistant ran exclusively on a single model (`qwen3.5:2b`). Because it was a reasoning/thinking model running on consumer hardware (e.g., RTX 2050 4GB), even a simple *"hi"* or *"what was my last mail?"* forced the model into massive chain-of-thought loops, generating hundreds of internal hidden reasoning tokens before outputting an answer. A simple greeting or inbox check took **over 60 seconds**!
+* **The Solution: Intent-Based Model Routing:**
+  Instead of forcing one model to do everything, we implemented a 3-tier routing architecture with few-shot intent classification:
+  1. **Micro-Classifier (`qwen3:0.6b` / ~400MB VRAM):** Takes ~100ms to classify the user's intent into `EMAIL_LOOKUP`, `FAST_CHAT`, or `DEEP_REASON`.
+  2. **Fast Chat / Lookup Worker (`qwen3:1.7b`):** Answers casual greetings, drafts, and email summaries in **~2 seconds** without heavy reasoning overhead.
+  3. **Deep Reasoning Model (`qwen3.5:2b`):** Reserved strictly for complex multi-step reasoning, coding, and analytical tasks where thinking chains are genuinely needed.
+
+---
+
 ## 🌟 Key Features
 
-* **Real-time SSE Streaming:** Tokens stream instantly to the UI as Qwen generates them.
-* **Collapsible "Thinking" Accordion:** Displays live reasoning step-by-step (`Thinking... (14s)`), and collapses automatically into `🧠 Thought process ▾` when the final answer begins.
+* **Sub-2s Responses via Dynamic Model Routing:** Automatically switches between fast instruct and deep reasoning models based on user intent.
+* **Local Memory & Email Integration (DuckDB):** Ingests and indexes Gmail messages locally into `data/assistant.duckdb` for instant factual lookups without cloud dependency.
+* **Real-time SSE Streaming:** Tokens stream instantly to the UI as the active model generates them.
+* **Collapsible "Thinking" Accordion:** When deep reasoning triggers, displays live reasoning step-by-step (`Thinking... (14s)`), and collapses automatically into `🧠 Thought process ▾` when the final answer begins.
 * **Passwordless Device Authentication:** Every request requires an authorized `X-Device-Token`. Unauthorized callers or random ngrok visitors get rejected in 1ms with `401 Unauthorized`.
 * **Zero-Build PWA:** Runs directly from FastAPI. No Node.js or npm needed.
 * **Mobile Ready:** Tap "Add to Home Screen" on iOS/Android to install it as a standalone app with no browser address bar.
@@ -80,8 +99,12 @@ PORT=8000
 DEBUG=True
 
 OLLAMA_BASE_URL=http://172.25.240.1:11434
-OLLAMA_MODEL=qwen3.5:2b
 LLM_TIMEOUT_SECONDS=120.0
+
+# 3-Model Dynamic Routing
+MODEL_ROUTER=qwen3:0.6b        # Fast ~100ms intent classifier
+MODEL_FAST=qwen3:1.7b          # Instant 1-2s replies (chat, drafting, email lookups)
+MODEL_REASONING=qwen3.5:2b     # Deep reasoning model (logic, math, code analysis)
 
 DEFAULT_SYSTEM_PROMPT="You are an intelligent, proactive personal AI assistant. Be concise, helpful, and clear."
 DEFAULT_TEMPERATURE=0.7

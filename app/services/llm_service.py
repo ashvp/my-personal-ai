@@ -25,6 +25,45 @@ def get_wsl_host_ip() -> Optional[str]:
     return None
 
 
+CLASSIFIER_FEW_SHOT_SYSTEM = (
+    "You are a fast intent classifier for a personal AI assistant.\n"
+    "Classify the user's message into exactly ONE of the following 3 categories:\n"
+    "- EMAIL_LOOKUP: Searching, checking, counting, or reading emails, inboxes, or messages.\n"
+    "- DEEP_REASON: Complex logic, code debugging, math problems, multi-step planning, or in-depth analytical reasoning.\n"
+    "- FAST_CHAT: General conversation, greetings, drafting emails/replies, writing, summarization, casual questions, and quick everyday tasks.\n\n"
+    "Respond with ONLY the category name. Do not explain or include any other text."
+)
+
+CLASSIFIER_FEW_SHOT_MESSAGES = [
+    {"role": "system", "content": CLASSIFIER_FEW_SHOT_SYSTEM},
+    # Few-shot examples:
+    {"role": "user", "content": "What was my last email?"},
+    {"role": "assistant", "content": "EMAIL_LOOKUP"},
+    {"role": "user", "content": "Did Google reply to my application?"},
+    {"role": "assistant", "content": "EMAIL_LOOKUP"},
+    {"role": "user", "content": "Check my inbox for flight tickets or confirmation numbers."},
+    {"role": "assistant", "content": "EMAIL_LOOKUP"},
+    {"role": "user", "content": "How many unread emails do I have from today?"},
+    {"role": "assistant", "content": "EMAIL_LOOKUP"},
+    {"role": "user", "content": "Draft a polite reply saying I will review the proposal by tomorrow."},
+    {"role": "assistant", "content": "FAST_CHAT"},
+    {"role": "user", "content": "Summarize these meeting notes in 3 bullet points."},
+    {"role": "assistant", "content": "FAST_CHAT"},
+    {"role": "user", "content": "Hello, how are you? What can you do?"},
+    {"role": "assistant", "content": "FAST_CHAT"},
+    {"role": "user", "content": "Write a quick caption for an Instagram post about coffee."},
+    {"role": "assistant", "content": "FAST_CHAT"},
+    {"role": "user", "content": "Analyze the time complexity and memory overhead of these two distributed consensus algorithms."},
+    {"role": "assistant", "content": "DEEP_REASON"},
+    {"role": "user", "content": "There is a subtle race condition in this mutex lock code, debug it step-by-step."},
+    {"role": "assistant", "content": "DEEP_REASON"},
+    {"role": "user", "content": "Solve this riddle: If three frogs jump across five stones under specific constraints..."},
+    {"role": "assistant", "content": "DEEP_REASON"},
+    {"role": "user", "content": "Compare the tax implications of stock options vs RSUs across different vesting schedules."},
+    {"role": "assistant", "content": "DEEP_REASON"},
+]
+
+
 class OllamaLLMService:
     def __init__(
         self,
@@ -35,6 +74,9 @@ class OllamaLLMService:
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.router_model = getattr(settings, "MODEL_ROUTER", "qwen3:0.6b")
+        self.fast_model = getattr(settings, "MODEL_FAST", "qwen3:1.7b")
+        self.reasoning_model = getattr(settings, "MODEL_REASONING", "qwen3.5:2b")
         self.system_prompt = system_prompt
         self.temperature = temperature
         self.timeout = settings.LLM_TIMEOUT_SECONDS
@@ -48,61 +90,136 @@ class OllamaLLMService:
                 urls.append(wsl_url)
         return urls
 
-    def _assemble_contextual_prompt(self, user_prompt: str, override_prompt: Optional[str] = None) -> str:
-        """Injects Intermediate Memory and relevant Long-Term Memory into the system prompt."""
-        parts = [override_prompt or self.system_prompt]
+    async def classify_intent(self, user_prompt: str) -> str:
+        """Classifies user intent using the 0.6B micro-model with few-shot prompting."""
+        messages = list(CLASSIFIER_FEW_SHOT_MESSAGES)
+        messages.append({"role": "user", "content": user_prompt})
 
-        # 1. Inject Intermediate Memory (Active Digest & Today's Briefing)
-        intermediate_context = memory_service.get_intermediate_context()
-        if intermediate_context:
-            parts.append(intermediate_context)
+        payload = {
+            "model": self.router_model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": 0.0,
+                "num_predict": 10
+            }
+        }
 
-        # 2. Inject Relevant Long-Term Memory (Search if query seems inquiry-based)
-        keywords = [
-            "email", "mail", "inbox", "message", "sent", "from", "unread", "yesterday",
-            "invoice", "receipt", "flight", "ticket", "project", "contract", "meeting"
-        ]
-        if any(kw in user_prompt.lower() for kw in keywords):
-            # Extract basic search terms
-            words = [
-                w.strip("?,!.") for w in user_prompt.split()
-                if w.lower() not in ("what", "did", "the", "a", "an", "is", "was", "any", "my", "me", "tell", "show", "have", "i", "got", "about")
+        candidate_urls = self._get_target_urls()
+        for base_url in candidate_urls:
+            endpoint = f"{base_url}/api/chat"
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    response = await client.post(endpoint, json=payload)
+                if response.status_code == 200:
+                    data = response.json()
+                    raw = data.get("message", {}).get("content", "").strip().upper()
+                    if "EMAIL_LOOKUP" in raw:
+                        intent = "EMAIL_LOOKUP"
+                    elif "DEEP_REASON" in raw:
+                        intent = "DEEP_REASON"
+                    else:
+                        intent = "FAST_CHAT"
+
+                    logger.info(f"[Intent Router] '{user_prompt[:40]}...' -> {intent} (raw: '{raw}') via {self.router_model}")
+                    return intent
+            except Exception as exc:
+                logger.warning(f"Intent classification call failed to {base_url}: {exc}")
+                continue
+
+        logger.warning(f"All router endpoints failed for prompt '{user_prompt[:40]}'. Falling back to FAST_CHAT.")
+        return "FAST_CHAT"
+
+    def _prepare_routed_execution(
+        self,
+        prompt: str,
+        intent: str,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None
+    ) -> tuple[str, str, float]:
+        """Prepares the destination model, focused system prompt, and temperature based on intent."""
+
+        # 1. EMAIL_LOOKUP: Query DuckDB and use Fast Model
+        if intent == "EMAIL_LOOKUP":
+            model = self.fast_model
+            temp = 0.2  # Low temperature for strict factual accuracy
+
+            lower_prompt = prompt.lower()
+            if any(w in lower_prompt for w in ["last", "latest", "recent"]):
+                emails = memory_service.get_recent_emails(limit=3)
+            else:
+                words = [
+                    w.strip("?,!.") for w in prompt.split()
+                    if w.lower() not in ("what", "did", "the", "a", "an", "is", "was", "any", "my", "me", "tell", "show", "have", "i", "got", "about", "email", "emails", "mail", "inbox")
+                ]
+                search_term = " ".join(words)
+                emails = memory_service.search_emails(search_term, limit=3) if search_term else memory_service.get_recent_emails(limit=3)
+                if not emails:
+                    emails = memory_service.get_recent_emails(limit=3)
+
+            email_lines = []
+            for e in emails:
+                email_lines.append(
+                    f"• From: {e.get('sender', '')}\n"
+                    f"  Date: {e.get('date', '')}\n"
+                    f"  Subject: {e.get('subject', '')}\n"
+                    f"  Content: {e.get('summary', '') or e.get('snippet', '')}"
+                )
+            emails_context = "\n\n".join(email_lines) if email_lines else "No matching emails found in database."
+
+            sys_prompt = (
+                "You are a personal AI email assistant. The user is asking about their emails.\n"
+                "Here is the verified email data retrieved from their local database:\n\n"
+                f"{emails_context}\n\n"
+                "Instructions:\n"
+                "1. Answer the user's question directly and concisely based ONLY on the email data above.\n"
+                "2. Clearly mention the sender, subject, date, and key details.\n"
+                "3. Do not assume or hallucinate details not present in the data."
+            )
+            return model, sys_prompt, temp
+
+        # 2. DEEP_REASON: Complex logic/analysis using Reasoning Model
+        elif intent == "DEEP_REASON":
+            model = self.reasoning_model
+            temp = temperature if temperature is not None else 0.6
+            intermediate_context = memory_service.get_intermediate_context()
+            parts = [
+                system_prompt or (
+                    "You are an expert analytical AI assistant. "
+                    "Analyze the user's problem thoroughly and logically, considering constraints, trade-offs, and edge cases before providing your conclusion."
+                )
             ]
-            search_query = " ".join(words)
-            if search_query:
-                results = memory_service.search_emails(search_query, limit=3)
-                if results:
-                    email_lines = ["--- RELEVANT EMAILS FROM ARCHIVE (LONG-TERM MEMORY) ---"]
-                    for r in results:
-                        email_lines.append(
-                            f"• [Date: {r.get('date', '')}] From: {r.get('sender', '')}\n"
-                            f"  Subject: {r.get('subject', '')}\n"
-                            f"  Details: {r.get('summary', '') or r.get('snippet', '')}"
-                        )
-                    email_lines.append("---------------------------------------------------------")
-                    parts.append("\n".join(email_lines))
+            if intermediate_context:
+                parts.append(intermediate_context)
+            return model, "\n\n".join(parts), temp
 
-        return "\n\n".join(parts)
+        # 3. FAST_CHAT: Quick general chat, drafting, summarization using Fast Model
+        else:
+            model = self.fast_model
+            temp = temperature if temperature is not None else self.temperature
+            intermediate_context = memory_service.get_intermediate_context()
+            parts = [system_prompt or self.system_prompt]
+            if intermediate_context:
+                parts.append(intermediate_context)
+            return model, "\n\n".join(parts), temp
 
     def _build_payload(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None,
+        target_model: str,
+        system_prompt: str,
+        temperature: float,
         stream: bool = False
     ) -> Dict[str, Any]:
-        full_system_prompt = self._assemble_contextual_prompt(prompt, system_prompt)
-        temp = temperature if temperature is not None else self.temperature
-
         return {
-            "model": self.model,
+            "model": target_model,
             "messages": [
-                {"role": "system", "content": full_system_prompt},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
             "stream": stream,
             "options": {
-                "temperature": temp
+                "temperature": temperature
             }
         }
 
@@ -112,14 +229,25 @@ class OllamaLLMService:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None
     ) -> ChatResponse:
-        """Blocking reply method. Captures both thinking process and final answer."""
-        payload = self._build_payload(prompt, system_prompt, temperature, stream=False)
+        """Blocking reply method with dynamic 3-model intent routing."""
+        intent = await self.classify_intent(prompt)
+        target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
+            prompt, intent, system_prompt, temperature
+        )
+
+        payload = self._build_payload(
+            prompt=prompt,
+            target_model=target_model,
+            system_prompt=routed_sys_prompt,
+            temperature=temp,
+            stream=False
+        )
         candidate_urls = self._get_target_urls()
         last_connect_error: Optional[Exception] = None
 
         for base_url in candidate_urls:
             endpoint = f"{base_url}/api/chat"
-            logger.info(f"[Blocking] Querying Ollama at {endpoint} with model: {self.model}")
+            logger.info(f"[Blocking] Querying Ollama at {endpoint} with routed model: {target_model} (Intent: {intent})")
 
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -147,7 +275,7 @@ class OllamaLLMService:
                 return ChatResponse(
                     reply=content,
                     thinking=thinking if thinking != content else None,
-                    model=data.get("model", self.model),
+                    model=f"{data.get('model', target_model)} [{intent}]",
                     total_duration_seconds=total_duration_sec
                 )
 
@@ -159,7 +287,7 @@ class OllamaLLMService:
                 logger.error(f"Timeout querying {base_url}: {exc}")
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail=f"Request to model '{self.model}' timed out after {self.timeout}s."
+                    detail=f"Request to model '{target_model}' timed out after {self.timeout}s."
                 )
             except HTTPException:
                 raise
@@ -181,8 +309,19 @@ class OllamaLLMService:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
-        """Real-time SSE token stream generator with 3-tier memory context."""
-        payload = self._build_payload(prompt, system_prompt, temperature, stream=True)
+        """Real-time SSE token stream generator with dynamic 3-model intent routing."""
+        intent = await self.classify_intent(prompt)
+        target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
+            prompt, intent, system_prompt, temperature
+        )
+
+        payload = self._build_payload(
+            prompt=prompt,
+            target_model=target_model,
+            system_prompt=routed_sys_prompt,
+            temperature=temp,
+            stream=True
+        )
         candidate_urls = self._get_target_urls()
 
         client = httpx.AsyncClient(timeout=self.timeout)
@@ -242,7 +381,8 @@ class OllamaLLMService:
                         "type": "done",
                         "token": "",
                         "done": True,
-                        "model": chunk.get("model", self.model),
+                        "model": f"{chunk.get('model', target_model)} [{intent}]",
+                        "intent": intent,
                         "total_duration_seconds": total_sec
                     }
                     yield f"data: {json.dumps(event_data)}\n\n"

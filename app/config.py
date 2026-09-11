@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen3.5:2b"
     LLM_TIMEOUT_SECONDS: float = 120.0
 
+    # Model Routing Settings
+    MODEL_ROUTER: str = "qwen3:0.6b"
+    MODEL_FAST: str = "qwen3:1.7b"
+    MODEL_REASONING: str = "qwen3.5:2b"
+
     # LLM Defaults (kept internal to backend)
     DEFAULT_SYSTEM_PROMPT: str = (
         "You are an intelligent, proactive personal AI assistant. "
