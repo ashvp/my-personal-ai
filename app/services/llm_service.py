@@ -27,8 +27,9 @@ def get_wsl_host_ip() -> Optional[str]:
 
 CLASSIFIER_FEW_SHOT_SYSTEM = (
     "You are a fast intent classifier for a personal AI assistant.\n"
-    "Classify the user's message into exactly ONE of the following 3 categories:\n"
-    "- EMAIL_LOOKUP: Searching, checking, counting, or reading emails, inboxes, or messages.\n"
+    "Classify the user's message into exactly ONE of the following 4 categories:\n"
+    "- MESSAGE_LOOKUP: Searching, checking, or reading WhatsApp messages, texts, chats, or conversations.\n"
+    "- EMAIL_LOOKUP: Searching, checking, counting, or reading emails, inboxes, or mail messages.\n"
     "- DEEP_REASON: Complex logic, code debugging, math problems, multi-step planning, or in-depth analytical reasoning.\n"
     "- FAST_CHAT: General conversation, greetings, drafting emails/replies, writing, summarization, casual questions, and quick everyday tasks.\n\n"
     "Respond with ONLY the category name. Do not explain or include any other text."
@@ -37,9 +38,17 @@ CLASSIFIER_FEW_SHOT_SYSTEM = (
 CLASSIFIER_FEW_SHOT_MESSAGES = [
     {"role": "system", "content": CLASSIFIER_FEW_SHOT_SYSTEM},
     # Few-shot examples:
+    {"role": "user", "content": "What was my last WhatsApp message?"},
+    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
+    {"role": "user", "content": "What did Rahul text me yesterday?"},
+    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
+    {"role": "user", "content": "Did anyone message me about the Goa trip?"},
+    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
+    {"role": "user", "content": "Check my recent chats for the WiFi password."},
+    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
     {"role": "user", "content": "What was my last email?"},
     {"role": "assistant", "content": "EMAIL_LOOKUP"},
-    {"role": "user", "content": "Did Google reply to my application?"},
+    {"role": "user", "content": "Did Google reply to my job application?"},
     {"role": "assistant", "content": "EMAIL_LOOKUP"},
     {"role": "user", "content": "Check my inbox for flight tickets or confirmation numbers."},
     {"role": "assistant", "content": "EMAIL_LOOKUP"},
@@ -114,7 +123,9 @@ class OllamaLLMService:
                 if response.status_code == 200:
                     data = response.json()
                     raw = data.get("message", {}).get("content", "").strip().upper()
-                    if "EMAIL_LOOKUP" in raw:
+                    if "MESSAGE_LOOKUP" in raw:
+                        intent = "MESSAGE_LOOKUP"
+                    elif "EMAIL_LOOKUP" in raw:
                         intent = "EMAIL_LOOKUP"
                     elif "DEEP_REASON" in raw:
                         intent = "DEEP_REASON"
@@ -139,7 +150,45 @@ class OllamaLLMService:
     ) -> tuple[str, str, float]:
         """Prepares the destination model, focused system prompt, and temperature based on intent."""
 
-        # 1. EMAIL_LOOKUP: Query DuckDB and use Fast Model
+        # 1. MESSAGE_LOOKUP: Query DuckDB WhatsApp / Chat messages and use Fast Model
+        if intent == "MESSAGE_LOOKUP":
+            model = self.fast_model
+            temp = 0.2
+
+            lower_prompt = prompt.lower()
+            if any(w in lower_prompt for w in ["last", "latest", "recent"]):
+                messages = memory_service.get_recent_messages(limit=6)
+            else:
+                words = [
+                    w.strip("?,!.") for w in prompt.split()
+                    if w.lower() not in ("what", "did", "the", "a", "an", "is", "was", "any", "my", "me", "tell", "show", "have", "i", "got", "about", "whatsapp", "message", "messages", "text", "texts", "chat", "chats")
+                ]
+                search_term = " ".join(words)
+                messages = memory_service.search_messages(search_term, limit=6) if search_term else memory_service.get_recent_messages(limit=6)
+                if not messages:
+                    messages = memory_service.get_recent_messages(limit=6)
+
+            msg_lines = []
+            for m in messages:
+                direction = "Sent by me" if m.get("is_sent_by_me") else f"From {m.get('sender', '')}"
+                msg_lines.append(
+                    f"• [{m.get('date_str', '')}] In '{m.get('thread_title', '')}' - {direction}:\n"
+                    f"  \"{m.get('content', '')}\""
+                )
+            context = "\n".join(msg_lines) if msg_lines else "No matching messages found in database."
+
+            sys_prompt = (
+                "You are a personal AI chat assistant. The user is asking about their WhatsApp messages and conversations.\n"
+                "Here is the verified message data retrieved from their local database:\n\n"
+                f"{context}\n\n"
+                "Instructions:\n"
+                "1. Answer the user's question directly and concisely based ONLY on the messages above.\n"
+                "2. Explicitly note who sent the message, the contact/group name, and the timestamp.\n"
+                "3. Be concise, direct, and factual."
+            )
+            return model, sys_prompt, temp
+
+        # 2. EMAIL_LOOKUP: Query DuckDB and use Fast Model
         if intent == "EMAIL_LOOKUP":
             model = self.fast_model
             temp = 0.2  # Low temperature for strict factual accuracy

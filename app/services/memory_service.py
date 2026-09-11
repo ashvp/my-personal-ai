@@ -53,7 +53,24 @@ class MemoryService:
                     );
                 """)
 
-                # 2. Intermediate Memory (Active Digest & Daily Briefing)
+                # 2. Unified Messages Table (WhatsApp, Chats, Multi-Modal) with 3 Cognitive Tiers
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id VARCHAR PRIMARY KEY,
+                        source VARCHAR DEFAULT 'whatsapp',
+                        thread_id VARCHAR,
+                        thread_title VARCHAR,
+                        sender VARCHAR,
+                        is_sent_by_me BOOLEAN,
+                        content VARCHAR,
+                        timestamp BIGINT,
+                        date_str VARCHAR,
+                        memory_tier VARCHAR, -- 'working', 'episodic', 'long_term'
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+
+                # 3. Intermediate Memory (Active Digest & Daily Briefing)
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS intermediate_memory (
                         id VARCHAR PRIMARY KEY,
@@ -150,6 +167,110 @@ class MemoryService:
                 """, [limit]).fetchall()
 
                 cols = ["id", "sender", "subject", "date", "summary", "snippet", "is_read"]
+                return [dict(zip(cols, row)) for row in rows]
+            finally:
+                conn.close()
+
+    # --- Multi-Modal Messages & 3-Tier Chat Storage ---
+
+    def store_messages_batch(self, messages: List[Dict[str, Any]]):
+        """Batch inserts or replaces messages into DuckDB."""
+        if not messages:
+            return
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                conn.executemany("""
+                    INSERT OR REPLACE INTO messages (
+                        id, source, thread_id, thread_title, sender,
+                        is_sent_by_me, content, timestamp, date_str, memory_tier
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    (
+                        m.get("id"),
+                        m.get("source", "whatsapp"),
+                        m.get("thread_id", ""),
+                        m.get("thread_title", "Unknown"),
+                        m.get("sender", ""),
+                        m.get("is_sent_by_me", False),
+                        m.get("content", ""),
+                        m.get("timestamp", 0),
+                        m.get("date_str", ""),
+                        m.get("memory_tier", "long_term")
+                    )
+                    for m in messages
+                ])
+            finally:
+                conn.close()
+
+    def get_working_messages(self, limit: int = 30) -> List[Dict[str, Any]]:
+        """Working Memory: Fetches active messages from today and yesterday."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                rows = conn.execute("""
+                    SELECT id, source, thread_title, sender, is_sent_by_me, content, date_str
+                    FROM messages
+                    WHERE memory_tier = 'working'
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, [limit]).fetchall()
+                cols = ["id", "source", "thread_title", "sender", "is_sent_by_me", "content", "date_str"]
+                return [dict(zip(cols, row)) for row in rows]
+            finally:
+                conn.close()
+
+    def get_episodic_narrative(self, contact_or_thread: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Episodic Memory: Reconstructs the story/conversation with a specific contact or topic."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                term = f"%{contact_or_thread}%"
+                rows = conn.execute("""
+                    SELECT id, source, thread_title, sender, is_sent_by_me, content, date_str
+                    FROM messages
+                    WHERE thread_title ILIKE ? OR sender ILIKE ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, [term, term, limit]).fetchall()
+                cols = ["id", "source", "thread_title", "sender", "is_sent_by_me", "content", "date_str"]
+                # Return in chronological order for narrative flow
+                result = [dict(zip(cols, row)) for row in rows]
+                result.reverse()
+                return result
+            finally:
+                conn.close()
+
+    def search_messages(self, query: str, limit: int = 6) -> List[Dict[str, Any]]:
+        """Searches across all message archives (Long-Term & Episodic)."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                term = f"%{query}%"
+                rows = conn.execute("""
+                    SELECT id, source, thread_title, sender, is_sent_by_me, content, date_str, memory_tier
+                    FROM messages
+                    WHERE content ILIKE ? OR thread_title ILIKE ? OR sender ILIKE ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, [term, term, term, limit]).fetchall()
+                cols = ["id", "source", "thread_title", "sender", "is_sent_by_me", "content", "date_str", "memory_tier"]
+                return [dict(zip(cols, row)) for row in rows]
+            finally:
+                conn.close()
+
+    def get_recent_messages(self, limit: int = 15) -> List[Dict[str, Any]]:
+        """Gets recent messages across all chats."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                rows = conn.execute("""
+                    SELECT id, source, thread_title, sender, is_sent_by_me, content, date_str, memory_tier
+                    FROM messages
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, [limit]).fetchall()
+                cols = ["id", "source", "thread_title", "sender", "is_sent_by_me", "content", "date_str", "memory_tier"]
                 return [dict(zip(cols, row)) for row in rows]
             finally:
                 conn.close()

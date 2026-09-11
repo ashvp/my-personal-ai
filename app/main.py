@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.api.v1.endpoints.chat import router as chat_router
 from app.api.v1.endpoints.gmail import router as gmail_router
+from app.api.v1.endpoints.whatsapp import router as whatsapp_router
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +71,8 @@ app.include_router(chat_router, tags=["Chat"])
 app.include_router(chat_router, prefix="/api/v1", tags=["Chat (v1)"])
 app.include_router(gmail_router, tags=["Gmail Sync"])
 app.include_router(gmail_router, prefix="/api/v1", tags=["Gmail Sync (v1)"])
+app.include_router(whatsapp_router, tags=["WhatsApp Sync"])
+app.include_router(whatsapp_router, prefix="/api/v1", tags=["WhatsApp Sync (v1)"])
 
 # Serve PWA Frontend
 if os.path.exists(FRONTEND_DIR):
