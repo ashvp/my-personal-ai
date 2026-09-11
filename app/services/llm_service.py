@@ -24,14 +24,21 @@ def get_wsl_host_ip() -> Optional[str]:
 
 
 class OllamaLLMService:
-    def __init__(self, base_url: str = settings.OLLAMA_BASE_URL, default_model: str = settings.OLLAMA_MODEL):
+    def __init__(
+        self,
+        base_url: str = settings.OLLAMA_BASE_URL,
+        model: str = settings.OLLAMA_MODEL,
+        system_prompt: str = settings.DEFAULT_SYSTEM_PROMPT,
+        temperature: float = settings.DEFAULT_TEMPERATURE
+    ):
         self.base_url = base_url.rstrip("/")
-        self.default_model = default_model
+        self.model = model
+        self.system_prompt = system_prompt
+        self.temperature = temperature
         self.timeout = settings.LLM_TIMEOUT_SECONDS
 
     def _get_target_urls(self) -> List[str]:
         urls = [self.base_url]
-        # In WSL, auto-add Windows host IP as fallback if not already primary
         wsl_host = get_wsl_host_ip()
         if wsl_host:
             wsl_url = f"http://{wsl_host}:11434"
@@ -39,36 +46,18 @@ class OllamaLLMService:
                 urls.append(wsl_url)
         return urls
 
-    def _prepare_messages(self, request: ChatRequest) -> List[Dict[str, str]]:
-        messages: List[Dict[str, str]] = []
-
-        # Optional system prompt
-        if request.system_prompt:
-            messages.append({"role": "system", "content": request.system_prompt})
-
-        # Historical turns if any
-        if request.history:
-            for item in request.history:
-                messages.append({"role": item.role, "content": item.content})
-
-        # Current turn
-        messages.append({"role": "user", "content": request.message})
-        return messages
-
     async def generate_reply(self, request: ChatRequest) -> ChatResponse:
-        # Avoid placeholder string values from Swagger UI
-        model = request.model
-        if not model or model.strip().lower() in ("", "string", "none", "null"):
-            model = self.default_model
-
-        messages = self._prepare_messages(request)
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": request.message}
+        ]
 
         payload: Dict[str, Any] = {
-            "model": model,
+            "model": self.model,
             "messages": messages,
             "stream": False,
             "options": {
-                "temperature": request.temperature if request.temperature is not None else 0.7
+                "temperature": self.temperature
             }
         }
 
@@ -77,7 +66,7 @@ class OllamaLLMService:
 
         for base_url in candidate_urls:
             endpoint = f"{base_url}/api/chat"
-            logger.info(f"Querying Ollama at {endpoint} using model: {model}")
+            logger.info(f"Querying Ollama at {endpoint} using model: {self.model}")
 
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -95,14 +84,12 @@ class OllamaLLMService:
                 total_duration_ns = data.get("total_duration")
                 total_duration_sec = round(total_duration_ns / 1e9, 2) if total_duration_ns else None
 
-                # Update base_url for subsequent requests if fallback succeeded
+                # Keep working base URL for subsequent calls
                 self.base_url = base_url
 
                 return ChatResponse(
                     reply=assistant_content,
-                    model=data.get("model", model),
-                    done=data.get("done", True),
-                    eval_count=data.get("eval_count"),
+                    model=data.get("model", self.model),
                     total_duration_seconds=total_duration_sec
                 )
 
@@ -114,7 +101,7 @@ class OllamaLLMService:
                 logger.error(f"Timeout querying {base_url}: {exc}")
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail=f"Request to model '{model}' timed out after {self.timeout}s."
+                    detail=f"Request to model '{self.model}' timed out after {self.timeout}s."
                 )
             except HTTPException:
                 raise

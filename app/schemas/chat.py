@@ -1,45 +1,12 @@
-from typing import List, Optional
+from typing import Optional
 from pydantic import BaseModel, Field
-
-
-class ChatMessage(BaseModel):
-    role: str = Field(
-        ...,
-        description="The role of the message sender (system, user, assistant)",
-        examples=["user"]
-    )
-    content: str = Field(
-        ...,
-        description="The text content of the message",
-        examples=["What are my top priorities today?"]
-    )
 
 
 class ChatRequest(BaseModel):
     message: str = Field(
         ...,
-        description="The current user query or message to send to Qwen",
-        examples=["Hello! Who are you and how can you assist me?"]
-    )
-    system_prompt: Optional[str] = Field(
-        default="You are an intelligent, proactive personal AI assistant. Be concise, helpful, and clear.",
-        description="Optional system prompt to guide the assistant's behavior",
-        examples=["You are an intelligent, proactive personal AI assistant. Be concise, helpful, and clear."]
-    )
-    history: Optional[List[ChatMessage]] = Field(
-        default_factory=list,
-        description="Optional list of previous conversation turns for multi-turn context"
-    )
-    temperature: Optional[float] = Field(
-        default=0.7,
-        ge=0.0,
-        le=2.0,
-        description="Sampling temperature for creativity vs determinism"
-    )
-    model: Optional[str] = Field(
-        default=None,
-        description="Optional model override (e.g. 'qwen3.5:2b'). Leave null or empty to use the default model.",
-        examples=[None]
+        description="The message or question for your personal assistant",
+        examples=["What are my top priorities today?"]
     )
 
 
@@ -51,14 +18,6 @@ class ChatResponse(BaseModel):
     model: str = Field(
         ...,
         description="The model name that produced the output"
-    )
-    done: bool = Field(
-        default=True,
-        description="Whether generation was completed"
-    )
-    eval_count: Optional[int] = Field(
-        default=None,
-        description="Number of tokens evaluated in response"
     )
     total_duration_seconds: Optional[float] = Field(
         default=None,
