@@ -51,9 +51,9 @@ def display_qr(text: str):
         )
         qr.add_data(text)
         qr.make(fit=True)
-        print("\n" + "=" * 50)
-        print("  📱 SCAN WITH YOUR PHONE CAMERA OR ASSISTANT APP")
-        print("=" * 50)
+        print("\n" + "=" * 55)
+        print("  📱 SCAN WITH YOUR PHONE CAMERA TO AUTO-OPEN & PAIR")
+        print("=" * 55)
         qr.print_ascii(invert=True)
     except ImportError:
         print("\n[Tip] Install 'qrcode' to render ASCII QR codes in terminal: pip install qrcode")
@@ -67,7 +67,7 @@ def main():
     args = parser.parse_args()
 
     # Determine server URL
-    server_url = args.url or "http://localhost:8000"
+    server_url = (args.url or "https://deplorable-endodermal-clarine.ngrok-free.dev").rstrip("/")
 
     existing_tokens = get_existing_tokens()
 
@@ -79,34 +79,34 @@ def main():
     else:
         token = existing_tokens[0]
 
-    # Payload for mobile phone pairing
-    pairing_data = {
-        "server_url": server_url,
-        "token": token,
-        "device_name": args.name or "My Device"
-    }
-    payload_str = json.dumps(pairing_data)
+    # Instant Web App Pairing Link (auto-authenticates and clears token from URL)
+    direct_link = f"{server_url}/?token={token}"
 
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 65)
     print("           🔐 PERSONAL AI ASSISTANT - DEVICE PAIRING")
-    print("=" * 60)
+    print("=" * 65)
     print(f"\n🔑 Device Token: {token}")
     print(f"🌐 Server URL:   {server_url}")
+    print(f"🔗 Direct Link:  {direct_link}")
 
-    print("\n--- 💻 For Secondary Laptops / Scripts ---")
-    print("Test real-time streaming in terminal (curl -N streams tokens live):")
+    print("\n--- 💻 Option 1: On Your Other Laptop Browser ---")
+    print(f"Open this URL (it will automatically pair and save your token):")
+    print(f"  👉 {direct_link}")
+
+    print("\n--- 📱 Option 2: On Your Mobile Phone ---")
+    print("Scan the QR code below with your phone camera.")
+    print("It will open the app and automatically pair your phone.")
+    print("Then tap 'Share' -> 'Add to Home Screen' to install it as an app!")
+
+    # Display QR encoding the direct web link for camera scanning
+    display_qr(direct_link)
+
+    print("\n--- ⚡ Option 3: Terminal / Scripts (curl -N) ---")
     print(f'curl -N -X POST "{server_url}/chat" \\')
     print(f'     -H "X-Device-Token: {token}" \\')
     print('     -H "Content-Type: application/json" \\')
-    print('     -d \'{"message": "Hello from my other laptop!"}\'')
-
-    print("\nOr in Swagger UI (http://localhost:8000/docs):")
-    print("1. Click the 'Authorize' 🔓 button at top right.")
-    print(f"2. Paste: {token}")
-
-    # Display QR for mobile
-    display_qr(payload_str)
-    print("=" * 60 + "\n")
+    print('     -d \'{"message": "Hello from another laptop!"}\'')
+    print("=" * 65 + "\n")
 
 
 if __name__ == "__main__":
