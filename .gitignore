@@ -1,0 +1,7 @@
+/venv
+
+.env
+.env.example
+
+run.py
+__pycache__/
