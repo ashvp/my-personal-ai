@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from app.config import settings
 from app.api.v1.endpoints.chat import router as chat_router
+from app.api.v1.endpoints.gmail import router as gmail_router
 
 # Configure logging
 logging.basicConfig(
@@ -64,9 +65,11 @@ async def health_check():
     }
 
 
-# Include chat router at root (/chat) and API versioned (/api/v1/chat)
+# Include routers at root and API versioned
 app.include_router(chat_router, tags=["Chat"])
 app.include_router(chat_router, prefix="/api/v1", tags=["Chat (v1)"])
+app.include_router(gmail_router, tags=["Gmail Sync"])
+app.include_router(gmail_router, prefix="/api/v1", tags=["Gmail Sync (v1)"])
 
 # Serve PWA Frontend
 if os.path.exists(FRONTEND_DIR):

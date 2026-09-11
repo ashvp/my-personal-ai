@@ -83,6 +83,45 @@ saveTokenBtn.addEventListener('click', () => {
 tokenSettingsBtn.addEventListener('click', openAuthModal);
 authStatusBadge.addEventListener('click', openAuthModal);
 
+const syncGmailBtn = document.getElementById('syncGmailBtn');
+const syncGmailIcon = document.getElementById('syncGmailIcon');
+
+if (syncGmailBtn) {
+  syncGmailBtn.addEventListener('click', async () => {
+    const token = getStoredToken();
+    if (!token) {
+      openAuthModal();
+      return;
+    }
+
+    syncGmailIcon.classList.add('animate-spin', 'text-indigo-400');
+    try {
+      const res = await fetch('/gmail/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Token': token
+        }
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        alert(`⚠️ Sync failed (HTTP ${res.status}): ${errText.slice(0, 150)}`);
+        return;
+      }
+      const data = await res.json();
+      if (data.success) {
+        alert(`📬 Gmail Sync: ${data.message}`);
+      } else {
+        alert(`⚠️ ${data.message}`);
+      }
+    } catch (err) {
+      alert(`❌ Sync error: ${err.message}`);
+    } finally {
+      syncGmailIcon.classList.remove('animate-spin', 'text-indigo-400');
+    }
+  });
+}
+
 // 2. Chat UI Helpers
 function autoResizeInput() {
   messageInput.style.height = 'auto';

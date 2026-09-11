@@ -5,3 +5,7 @@
 
 run.py
 __pycache__/
+
+credentials.json
+
+token.json

@@ -74,6 +74,15 @@
         <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span> Checking...
       </div>
 
+      <!-- Sync Gmail Button -->
+      <button id="syncGmailBtn" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-950/70 text-indigo-300 border border-indigo-800/60 hover:bg-indigo-900/60 transition-all cursor-pointer" title="Sync Gmail into DuckDB Memory">
+        <svg id="syncGmailIcon" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+          <polyline points="22,6 12,13 2,6"></polyline>
+        </svg>
+        <span>Sync Mail</span>
+      </button>
+
       <!-- Settings Icon -->
       <button id="tokenSettingsBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors" title="Device Settings">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -109,7 +118,11 @@
         </p>
 
         <!-- Suggestion Chips -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 max-w-lg mx-auto text-left">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-w-lg mx-auto text-left">
+          <button onclick="fillPrompt('Give me an executive briefing of my latest emails and any action items.')" class="p-3 rounded-xl bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800/80 hover:border-indigo-500/40 transition-all text-xs text-slate-300">
+            <span class="block font-medium text-white mb-0.5">📬 Email Briefing</span>
+            "Give me an executive briefing of my latest emails"
+          </button>
           <button onclick="fillPrompt('Tell me an intriguing sci-fi short story')" class="p-3 rounded-xl bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800/80 hover:border-indigo-500/40 transition-all text-xs text-slate-300">
             <span class="block font-medium text-white mb-0.5">📖 Creative Story</span>
             "Tell me an intriguing sci-fi short story"

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'assistant-pwa-v1';
+const CACHE_NAME = 'assistant-pwa-v2';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
@@ -8,13 +8,6 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('Pre-cache error:', err);
-      });
-    })
-  );
   self.skipWaiting();
 });
 
@@ -29,20 +22,26 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Network-first strategy so UI updates are always instantly visible
 self.addEventListener('fetch', (event) => {
-  // Never cache API or chat requests
-  if (event.request.url.includes('/chat') || event.request.url.includes('/api') || event.request.method !== 'GET') {
+  if (
+    event.request.url.includes('/chat') ||
+    event.request.url.includes('/api') ||
+    event.request.url.includes('/gmail') ||
+    event.request.method !== 'GET'
+  ) {
     return;
   }
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return (
-        cached ||
-        fetch(event.request).catch(() => {
-          return cached;
-        })
-      );
-    })
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const clone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return networkResponse;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

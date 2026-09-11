@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 
 from app.config import settings
 from app.schemas.chat import ChatResponse
+from app.services.memory_service import memory_service
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,42 @@ class OllamaLLMService:
                 urls.append(wsl_url)
         return urls
 
+    def _assemble_contextual_prompt(self, user_prompt: str, override_prompt: Optional[str] = None) -> str:
+        """Injects Intermediate Memory and relevant Long-Term Memory into the system prompt."""
+        parts = [override_prompt or self.system_prompt]
+
+        # 1. Inject Intermediate Memory (Active Digest & Today's Briefing)
+        intermediate_context = memory_service.get_intermediate_context()
+        if intermediate_context:
+            parts.append(intermediate_context)
+
+        # 2. Inject Relevant Long-Term Memory (Search if query seems inquiry-based)
+        keywords = [
+            "email", "mail", "inbox", "message", "sent", "from", "unread", "yesterday",
+            "invoice", "receipt", "flight", "ticket", "project", "contract", "meeting"
+        ]
+        if any(kw in user_prompt.lower() for kw in keywords):
+            # Extract basic search terms
+            words = [
+                w.strip("?,!.") for w in user_prompt.split()
+                if w.lower() not in ("what", "did", "the", "a", "an", "is", "was", "any", "my", "me", "tell", "show", "have", "i", "got", "about")
+            ]
+            search_query = " ".join(words)
+            if search_query:
+                results = memory_service.search_emails(search_query, limit=3)
+                if results:
+                    email_lines = ["--- RELEVANT EMAILS FROM ARCHIVE (LONG-TERM MEMORY) ---"]
+                    for r in results:
+                        email_lines.append(
+                            f"• [Date: {r.get('date', '')}] From: {r.get('sender', '')}\n"
+                            f"  Subject: {r.get('subject', '')}\n"
+                            f"  Details: {r.get('summary', '') or r.get('snippet', '')}"
+                        )
+                    email_lines.append("---------------------------------------------------------")
+                    parts.append("\n".join(email_lines))
+
+        return "\n\n".join(parts)
+
     def _build_payload(
         self,
         prompt: str,
@@ -54,12 +91,13 @@ class OllamaLLMService:
         temperature: Optional[float] = None,
         stream: bool = False
     ) -> Dict[str, Any]:
-        sys_prompt = system_prompt or self.system_prompt
+        full_system_prompt = self._assemble_contextual_prompt(prompt, system_prompt)
         temp = temperature if temperature is not None else self.temperature
+
         return {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": sys_prompt},
+                {"role": "system", "content": full_system_prompt},
                 {"role": "user", "content": prompt}
             ],
             "stream": stream,
@@ -99,7 +137,6 @@ class OllamaLLMService:
                 content = msg.get("content", "")
                 thinking = msg.get("thinking", "")
 
-                # If model placed entire output in thinking, ensure reply isn't empty
                 if not content and thinking:
                     content = thinking
 
@@ -144,20 +181,13 @@ class OllamaLLMService:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
-        """Real-time SSE token stream generator.
-
-        Streams both reasoning/thinking tokens and final answer tokens in real time:
-        - data: {"type": "thinking", "token": "...", "done": false}\n\n
-        - data: {"type": "answer", "token": "...", "done": false}\n\n
-        - data: {"type": "done", "token": "", "done": true, ...}\n\n
-        """
+        """Real-time SSE token stream generator with 3-tier memory context."""
         payload = self._build_payload(prompt, system_prompt, temperature, stream=True)
         candidate_urls = self._get_target_urls()
 
         client = httpx.AsyncClient(timeout=self.timeout)
         target_endpoint = None
 
-        # Find responsive endpoint
         for base_url in candidate_urls:
             endpoint = f"{base_url}/api/chat"
             try:
@@ -199,11 +229,9 @@ class OllamaLLMService:
                 content = msg.get("content", "")
                 is_done = chunk.get("done", False)
 
-                # Stream reasoning tokens live as they are formed
                 if thinking:
                     yield f"data: {json.dumps({'type': 'thinking', 'token': thinking, 'done': False})}\n\n"
 
-                # Stream answer tokens live as they are formed
                 if content:
                     yield f"data: {json.dumps({'type': 'answer', 'token': content, 'done': False})}\n\n"
 
