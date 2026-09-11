@@ -1,11 +1,12 @@
 import os
+import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, AsyncGenerator
 import httpx
 from fastapi import HTTPException, status
 
 from app.config import settings
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import ChatResponse
 
 logger = logging.getLogger(__name__)
 
@@ -46,27 +47,41 @@ class OllamaLLMService:
                 urls.append(wsl_url)
         return urls
 
-    async def generate_reply(self, request: ChatRequest) -> ChatResponse:
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": request.message}
-        ]
-
-        payload: Dict[str, Any] = {
+    def _build_payload(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        stream: bool = False
+    ) -> Dict[str, Any]:
+        sys_prompt = system_prompt or self.system_prompt
+        temp = temperature if temperature is not None else self.temperature
+        return {
             "model": self.model,
-            "messages": messages,
-            "stream": False,
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": stream,
             "options": {
-                "temperature": self.temperature
+                "temperature": temp
             }
         }
 
+    async def generate_reply(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None
+    ) -> ChatResponse:
+        """Blocking reply method. Captures both thinking process and final answer."""
+        payload = self._build_payload(prompt, system_prompt, temperature, stream=False)
         candidate_urls = self._get_target_urls()
         last_connect_error: Optional[Exception] = None
 
         for base_url in candidate_urls:
             endpoint = f"{base_url}/api/chat"
-            logger.info(f"Querying Ollama at {endpoint} using model: {self.model}")
+            logger.info(f"[Blocking] Querying Ollama at {endpoint} with model: {self.model}")
 
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -80,15 +95,21 @@ class OllamaLLMService:
                     )
 
                 data = response.json()
-                assistant_content = data.get("message", {}).get("content", "")
+                msg = data.get("message", {})
+                content = msg.get("content", "")
+                thinking = msg.get("thinking", "")
+
+                # If model placed entire output in thinking, ensure reply isn't empty
+                if not content and thinking:
+                    content = thinking
+
                 total_duration_ns = data.get("total_duration")
                 total_duration_sec = round(total_duration_ns / 1e9, 2) if total_duration_ns else None
 
-                # Keep working base URL for subsequent calls
                 self.base_url = base_url
-
                 return ChatResponse(
-                    reply=assistant_content,
+                    reply=content,
+                    thinking=thinking if thinking != content else None,
                     model=data.get("model", self.model),
                     total_duration_seconds=total_duration_sec
                 )
@@ -106,7 +127,7 @@ class OllamaLLMService:
             except HTTPException:
                 raise
             except Exception as exc:
-                logger.exception("Unexpected error communicating with local LLM")
+                logger.exception("Unexpected error in generate_reply")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Internal error processing chat: {str(exc)}"
@@ -114,12 +135,97 @@ class OllamaLLMService:
 
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Could not connect to Ollama at {candidate_urls}. "
-                f"Error: {last_connect_error}. "
-                "Make sure Ollama is running on the host (`ollama serve` or Ollama app)."
-            )
+            detail=f"Could not connect to Ollama at {candidate_urls}. Error: {last_connect_error}."
         )
+
+    async def stream_reply(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None
+    ) -> AsyncGenerator[str, None]:
+        """Real-time SSE token stream generator.
+
+        Streams both reasoning/thinking tokens and final answer tokens in real time:
+        - data: {"type": "thinking", "token": "...", "done": false}\n\n
+        - data: {"type": "answer", "token": "...", "done": false}\n\n
+        - data: {"type": "done", "token": "", "done": true, ...}\n\n
+        """
+        payload = self._build_payload(prompt, system_prompt, temperature, stream=True)
+        candidate_urls = self._get_target_urls()
+
+        client = httpx.AsyncClient(timeout=self.timeout)
+        target_endpoint = None
+
+        # Find responsive endpoint
+        for base_url in candidate_urls:
+            endpoint = f"{base_url}/api/chat"
+            try:
+                response = await client.send(
+                    client.build_request("POST", endpoint, json=payload),
+                    stream=True
+                )
+                if response.status_code == 200:
+                    target_endpoint = endpoint
+                    self.base_url = base_url
+                    break
+                else:
+                    await response.aclose()
+            except httpx.ConnectError:
+                continue
+
+        if not target_endpoint:
+            await client.aclose()
+            err_payload = json.dumps({
+                "type": "error",
+                "error": f"Could not connect to Ollama at {candidate_urls}.",
+                "done": True
+            })
+            yield f"data: {err_payload}\n\n"
+            return
+
+        try:
+            async for line in response.aiter_lines():
+                if not line or not line.strip():
+                    continue
+
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = chunk.get("message", {})
+                thinking = msg.get("thinking", "")
+                content = msg.get("content", "")
+                is_done = chunk.get("done", False)
+
+                # Stream reasoning tokens live as they are formed
+                if thinking:
+                    yield f"data: {json.dumps({'type': 'thinking', 'token': thinking, 'done': False})}\n\n"
+
+                # Stream answer tokens live as they are formed
+                if content:
+                    yield f"data: {json.dumps({'type': 'answer', 'token': content, 'done': False})}\n\n"
+
+                if is_done:
+                    total_duration_ns = chunk.get("total_duration")
+                    total_sec = round(total_duration_ns / 1e9, 2) if total_duration_ns else None
+                    event_data = {
+                        "type": "done",
+                        "token": "",
+                        "done": True,
+                        "model": chunk.get("model", self.model),
+                        "total_duration_seconds": total_sec
+                    }
+                    yield f"data: {json.dumps(event_data)}\n\n"
+
+        except Exception as exc:
+            logger.exception("Error while streaming tokens from Ollama")
+            err_payload = json.dumps({"type": "error", "error": str(exc), "done": True})
+            yield f"data: {err_payload}\n\n"
+        finally:
+            await response.aclose()
+            await client.aclose()
 
 
 # Singleton instance for dependency injection

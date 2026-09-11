@@ -113,14 +113,26 @@ python run.py
 5. Test `POST /chat` with just:
    ```json
    {
-     "message": "Hello! What can you help me with?"
+     "message": "Hello! What can you help me with?",
+     "stream": true
    }
    ```
+   *(Swagger UI will receive the live SSE event stream)*
 
-### In Terminal / Other Laptop:
+### Real-Time Streaming via `curl`:
+Add `-N` (unbuffered) to see tokens stream live as Qwen produces them:
+```bash
+curl -N -X POST "http://localhost:8000/chat" \
+     -H "X-Device-Token: dev_a87f2b1c4e90d3e5f6a1b2c3d4e5f607" \
+     -H "Content-Type: application/json" \
+     -d '{"message": "Give me a quick 3-bullet briefing."}'
+```
+
+### Blocking JSON (for non-streaming or internal callers):
+Set `"stream": false`:
 ```bash
 curl -X POST "http://localhost:8000/chat" \
      -H "X-Device-Token: dev_a87f2b1c4e90d3e5f6a1b2c3d4e5f607" \
      -H "Content-Type: application/json" \
-     -d '{"message": "Hello from another laptop!"}'
+     -d '{"message": "Give me a quick 3-bullet briefing.", "stream": false}'
 ```

@@ -94,8 +94,8 @@ def main():
     print(f"🌐 Server URL:   {server_url}")
 
     print("\n--- 💻 For Secondary Laptops / Scripts ---")
-    print("Test in terminal:")
-    print(f'curl -X POST "{server_url}/chat" \\')
+    print("Test real-time streaming in terminal (curl -N streams tokens live):")
+    print(f'curl -N -X POST "{server_url}/chat" \\')
     print(f'     -H "X-Device-Token: {token}" \\')
     print('     -H "Content-Type: application/json" \\')
     print('     -d \'{"message": "Hello from my other laptop!"}\'')
