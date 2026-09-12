@@ -12,6 +12,7 @@ from app.api.v1.endpoints.gmail import router as gmail_router
 from app.api.v1.endpoints.whatsapp import router as whatsapp_router
 from app.api.v1.endpoints.outlook import router as outlook_router
 from app.api.v1.endpoints.sync import router as sync_router
+from app.api.v1.endpoints.sms import router as sms_router
 from app.services.background_sync import background_sync_service
 
 # Configure logging
@@ -89,6 +90,8 @@ app.include_router(outlook_router, tags=["Outlook Sync"])
 app.include_router(outlook_router, prefix="/api/v1", tags=["Outlook Sync (v1)"])
 app.include_router(sync_router, tags=["Background Sync"])
 app.include_router(sync_router, prefix="/api/v1", tags=["Background Sync (v1)"])
+app.include_router(sms_router, tags=["SMS Sync"])
+app.include_router(sms_router, prefix="/api/v1", tags=["SMS Sync (v1)"])
 
 # Serve PWA Frontend
 if os.path.exists(FRONTEND_DIR):

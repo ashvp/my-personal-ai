@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from app.config import settings
 from app.services.gmail_service import gmail_service
 from app.services.whatsapp_service import whatsapp_service
+from app.services.sms_service import sms_service
 from app.services.outlook_service import outlook_service
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,8 @@ class BackgroundSyncService:
                 logger.info(
                     f"✅ Background sync cycle completed. "
                     f"Gmail: {results.get('gmail', {}).get('synced_count', 0)}, "
-                    f"WhatsApp: {results.get('whatsapp', {}).get('synced_count', 0)}"
+                    f"WhatsApp: {results.get('whatsapp', {}).get('synced_count', 0)}, "
+                    f"SMS: {results.get('sms', {}).get('synced_count', 0)}"
                 )
             except Exception as exc:
                 logger.exception(f"Unexpected error during background sync: {exc}")
@@ -120,7 +122,22 @@ class BackgroundSyncService:
                 logger.error(f"Error during WhatsApp background sync: {exc}")
                 results["whatsapp"] = {"status": "error", "error": str(exc), "synced_count": 0}
 
-            # 3. Sync Outlook (if configured)
+            # 3. Sync Google Messages / SMS (Beeper SQLite)
+            try:
+                if sms_service.is_available():
+                    s_res = await asyncio.to_thread(sms_service.sync_messages, 50)
+                    results["sms"] = {
+                        "status": "success" if s_res.get("success") else "failed",
+                        "synced_count": s_res.get("synced_count", 0),
+                        "message": s_res.get("message", "")
+                    }
+                else:
+                    results["sms"]["status"] = "not_available"
+            except Exception as exc:
+                logger.error(f"Error during Google SMS background sync: {exc}")
+                results["sms"] = {"status": "error", "error": str(exc), "synced_count": 0}
+
+            # 4. Sync Outlook (if configured)
             try:
                 if outlook_service.is_authenticated():
                     o_res = await outlook_service.sync_emails(max_results=15)
@@ -134,6 +151,7 @@ class BackgroundSyncService:
             except Exception as exc:
                 logger.error(f"Error during Outlook background sync: {exc}")
                 results["outlook"] = {"status": "error", "error": str(exc), "synced_count": 0}
+
 
             end_time = datetime.now()
             duration = round((end_time - start_time).total_seconds(), 2)
@@ -159,8 +177,10 @@ class BackgroundSyncService:
             "sources": {
                 "gmail_authenticated": gmail_service.is_authenticated(),
                 "whatsapp_available": whatsapp_service.is_available(),
+                "sms_available": sms_service.is_available(),
                 "outlook_authenticated": outlook_service.is_authenticated()
             }
+
         }
 
 

@@ -173,7 +173,9 @@ It will automatically save your token into `localStorage` and clear the token fr
 | :--- | :--- | :--- | :--- |
 | **Gmail** | 🟢 **Active** | DuckDB `emails` table + Working Memory (<48h) | Google OAuth device flow. Full inbox search & summaries. |
 | **WhatsApp (Beeper)** | 🟢 **Active** | DuckDB `messages` table (3-Tier Engine) | Reads local SQLite store (`index.db`), auto-resolves 1-on-1 participant names, segments into Working (<48h), Episodic (2–30d), and Long-Term (>30d). |
+| **Google SMS (Beeper)** | 🟢 **Active** | DuckDB `messages` table (`source='sms'`) | Ingests Android RCS / SMS from Beeper store, resolves contact names, feeds cognitive triage (separates promos from personal SMS). |
 | **Outlook / College Mail** | 🟡 **On Hold (Tenant Restricted)** | Standby (`app/services/outlook_service.py`) | **University Policy Restriction:** Many university/organizational Microsoft 365 tenants require Tenant Admin consent for Microsoft Graph `Mail.Read`. Student self-registered Azure apps are often blocked with `AADSTS65002` / `Need admin approval`. |
+
 
 ### Outlook / College Mail Fallback Solutions:
 1. **Auto-Forwarding Rule (Recommended):** Set an inbox forwarding rule in college webmail (`outlook.office.com`) to redirect incoming emails to your connected Gmail account. The assistant automatically tags emails from your college domain as `source: college`.
