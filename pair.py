@@ -67,7 +67,9 @@ def main():
     args = parser.parse_args()
 
     # Determine server URL
-    server_url = (args.url or "https://deplorable-endodermal-clarine.ngrok-free.dev").rstrip("/")
+    default_server = os.getenv("SERVER_URL", "http://localhost:8000")
+    server_url = (args.url or default_server).rstrip("/")
+
 
     existing_tokens = get_existing_tokens()
 

@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 import logging
 from datetime import datetime
@@ -145,10 +146,10 @@ class MemoryService:
                 rows = conn.execute("""
                     SELECT id, sender, subject, date, summary, snippet
                     FROM emails
-                    WHERE subject ILIKE ? OR body_clean ILIKE ? OR sender ILIKE ? OR summary ILIKE ?
+                    WHERE subject ILIKE ? OR body_clean ILIKE ? OR sender ILIKE ? OR summary ILIKE ? OR source ILIKE ? OR labels ILIKE ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, [term, term, term, term, limit]).fetchall()
+                """, [term, term, term, term, term, term, limit]).fetchall()
 
                 cols = ["id", "sender", "subject", "date", "summary", "snippet"]
                 return [dict(zip(cols, row)) for row in rows]
@@ -238,6 +239,44 @@ class MemoryService:
                 result = [dict(zip(cols, row)) for row in rows]
                 result.reverse()
                 return result
+            finally:
+                conn.close()
+
+    def get_latest_message_timestamp(self, source: str = "whatsapp") -> Optional[int]:
+        """Returns the timestamp (ms) of the most recent message stored in DuckDB."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT MAX(timestamp) FROM messages WHERE source = ?",
+                    [source]
+                ).fetchone()
+                return row[0] if row and row[0] is not None else None
+            finally:
+                conn.close()
+
+    def refresh_message_memory_tiers(self):
+        """Ages existing messages across the 3 cognitive memory tiers based on elapsed time:
+        Working (<48h) -> Episodic (2-30d) -> Long-Term (>30d).
+        """
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                now_sec = time.time()
+                working_cutoff_ms = int((now_sec - (48 * 3600)) * 1000)
+                episodic_cutoff_ms = int((now_sec - (30 * 24 * 3600)) * 1000)
+
+                conn.execute("""
+                    UPDATE messages
+                    SET memory_tier = 'episodic'
+                    WHERE memory_tier = 'working' AND timestamp < ?
+                """, [working_cutoff_ms])
+
+                conn.execute("""
+                    UPDATE messages
+                    SET memory_tier = 'long_term'
+                    WHERE memory_tier = 'episodic' AND timestamp < ?
+                """, [episodic_cutoff_ms])
             finally:
                 conn.close()
 

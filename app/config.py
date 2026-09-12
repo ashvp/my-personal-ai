@@ -1,5 +1,5 @@
 import os
-from typing import Set
+from typing import Set, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,10 +28,20 @@ class Settings(BaseSettings):
     )
     DEFAULT_TEMPERATURE: float = 0.7
 
-    # Device Auth: comma-separated list of approved tokens
-    AUTHORIZED_DEVICE_TOKENS: str = "dev_a87f2b1c4e90d3e5f6a1b2c3d4e5f607"
+    # Device Auth: Sensitive tokens MUST come from .env (no secrets in codebase)
+    AUTHORIZED_DEVICE_TOKENS: str = ""
+
+    # Background Automated Sync Engine
+    BACKGROUND_SYNC_ENABLED: bool = True
+    BACKGROUND_SYNC_INTERVAL_MINUTES: int = 15
+
+    # Optional Outlook / Azure App ID (loaded from .env)
+    APPLICATION_ID_OUTLOOK: str = ""
+    DIRECTORY_ID_OUTLOOK: str = ""
 
     def get_authorized_tokens(self) -> Set[str]:
+        if not self.AUTHORIZED_DEVICE_TOKENS:
+            return set()
         return {
             token.strip()
             for token in self.AUTHORIZED_DEVICE_TOKENS.split(",")

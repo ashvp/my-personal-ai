@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from app.config import settings
 from app.schemas.chat import ChatResponse
 from app.services.memory_service import memory_service
+from app.services.triage_service import triage_service
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,8 @@ def get_wsl_host_ip() -> Optional[str]:
 
 CLASSIFIER_FEW_SHOT_SYSTEM = (
     "You are a fast intent classifier for a personal AI assistant.\n"
-    "Classify the user's message into exactly ONE of the following 4 categories:\n"
+    "Classify the user's message into exactly ONE of the following 5 categories:\n"
+    "- DAILY_BRIEFING: Requesting daily updates, morning briefings, schedule, agenda, overview of the day, or what needs to be done.\n"
     "- MESSAGE_LOOKUP: Searching, checking, or reading WhatsApp messages, texts, chats, or conversations.\n"
     "- EMAIL_LOOKUP: Searching, checking, counting, or reading emails, inboxes, or mail messages.\n"
     "- DEEP_REASON: Complex logic, code debugging, math problems, multi-step planning, or in-depth analytical reasoning.\n"
@@ -38,6 +40,18 @@ CLASSIFIER_FEW_SHOT_SYSTEM = (
 CLASSIFIER_FEW_SHOT_MESSAGES = [
     {"role": "system", "content": CLASSIFIER_FEW_SHOT_SYSTEM},
     # Few-shot examples:
+    {"role": "user", "content": "Give me updates for the day."},
+    {"role": "assistant", "content": "DAILY_BRIEFING"},
+    {"role": "user", "content": "Morning briefing."},
+    {"role": "assistant", "content": "DAILY_BRIEFING"},
+    {"role": "user", "content": "What's on my radar today?"},
+    {"role": "assistant", "content": "DAILY_BRIEFING"},
+    {"role": "user", "content": "Brief me on my day."},
+    {"role": "assistant", "content": "DAILY_BRIEFING"},
+    {"role": "user", "content": "What do I have to do today?"},
+    {"role": "assistant", "content": "DAILY_BRIEFING"},
+    {"role": "user", "content": "Give me an executive briefing of my day."},
+    {"role": "assistant", "content": "DAILY_BRIEFING"},
     {"role": "user", "content": "What was my last WhatsApp message?"},
     {"role": "assistant", "content": "MESSAGE_LOOKUP"},
     {"role": "user", "content": "What did Rahul text me yesterday?"},
@@ -123,7 +137,9 @@ class OllamaLLMService:
                 if response.status_code == 200:
                     data = response.json()
                     raw = data.get("message", {}).get("content", "").strip().upper()
-                    if "MESSAGE_LOOKUP" in raw:
+                    if "DAILY_BRIEFING" in raw:
+                        intent = "DAILY_BRIEFING"
+                    elif "MESSAGE_LOOKUP" in raw:
                         intent = "MESSAGE_LOOKUP"
                     elif "EMAIL_LOOKUP" in raw:
                         intent = "EMAIL_LOOKUP"
@@ -138,6 +154,16 @@ class OllamaLLMService:
                 logger.warning(f"Intent classification call failed to {base_url}: {exc}")
                 continue
 
+        # Heuristic fallback if router network or models hiccup
+        lower = user_prompt.lower()
+        if any(w in lower for w in ["briefing", "update for the day", "updates for the day", "today's update", "todays update", "on my plate", "on my radar", "agenda", "what do i have to do"]):
+            logger.info(f"[Intent Fallback] Detected DAILY_BRIEFING via heuristic keywords for: '{user_prompt[:40]}'")
+            return "DAILY_BRIEFING"
+        elif any(w in lower for w in ["whatsapp", "text", "message", "chat"]):
+            return "MESSAGE_LOOKUP"
+        elif any(w in lower for w in ["email", "mail", "inbox"]):
+            return "EMAIL_LOOKUP"
+
         logger.warning(f"All router endpoints failed for prompt '{user_prompt[:40]}'. Falling back to FAST_CHAT.")
         return "FAST_CHAT"
 
@@ -150,7 +176,14 @@ class OllamaLLMService:
     ) -> tuple[str, str, float]:
         """Prepares the destination model, focused system prompt, and temperature based on intent."""
 
-        # 1. MESSAGE_LOOKUP: Query DuckDB WhatsApp / Chat messages and use Fast Model
+        # 1. DAILY_BRIEFING: Intelligent multi-modal cognitive triage (Schedule -> People -> Promos)
+        if intent == "DAILY_BRIEFING":
+            model = self.fast_model
+            temp = 0.3
+            sys_prompt = triage_service.build_briefing_prompt(prompt)
+            return model, sys_prompt, temp
+
+        # 2. MESSAGE_LOOKUP: Query DuckDB WhatsApp / Chat messages and use Fast Model
         if intent == "MESSAGE_LOOKUP":
             model = self.fast_model
             temp = 0.2
@@ -158,6 +191,7 @@ class OllamaLLMService:
             lower_prompt = prompt.lower()
             if any(w in lower_prompt for w in ["last", "latest", "recent"]):
                 messages = memory_service.get_recent_messages(limit=6)
+
             else:
                 words = [
                     w.strip("?,!.") for w in prompt.split()

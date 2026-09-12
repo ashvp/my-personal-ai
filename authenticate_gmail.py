@@ -72,7 +72,7 @@ def authenticate():
     print(auth_url)
     print("-" * 65)
 
-    print("\n👉 STEP 2: Sign in with ashwin.vp.2005@gmail.com and click 'Allow'.")
+    print("\n👉 STEP 2: Sign in with your Google account and click 'Allow'.")
     print("When redirected, your browser address bar will show a URL starting with:")
     print("http://localhost:8080/?state=...&code=...")
 

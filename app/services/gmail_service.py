@@ -176,10 +176,14 @@ class GmailService:
             }
 
         except Exception as exc:
-            logger.exception("Error syncing Gmail messages")
+            err_str = str(exc)
+            if any(term in err_str.lower() for term in ["name resolution", "remotedisconnected", "connection", "socket", "timeout"]):
+                logger.warning(f"Gmail sync temporarily skipped (network/DNS glitch): {exc}")
+            else:
+                logger.exception("Error syncing Gmail messages")
             return {
                 "success": False,
-                "message": f"Gmail sync failed: {str(exc)}"
+                "message": f"Gmail sync failed: {err_str}"
             }
 
 

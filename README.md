@@ -22,17 +22,21 @@ localai/
 │   │       └── endpoints/
 │   │           ├── __init__.py
 │   │           ├── chat.py         # Protected POST /chat (SSE streaming by default)
-│   │           └── gmail.py        # Gmail sync & status endpoints
+│   │           ├── gmail.py        # Gmail sync & status endpoints
+│   │           ├── whatsapp.py     # WhatsApp (Beeper) sync & status endpoints
+│   │           └── outlook.py      # Outlook/College mail endpoints (on hold)
 │   ├── schemas/
 │   │   ├── __init__.py
 │   │   └── chat.py                 # ChatRequest & ChatResponse schemas
 │   └── services/
 │       ├── __init__.py
 │       ├── llm_service.py          # Dynamic 3-model intent router & Ollama stream service
-│       ├── memory_service.py       # 3-tier DuckDB memory (Short, Intermediate, Long-Term)
-│       └── gmail_service.py        # Gmail API OAuth client & message ingester
+│       ├── memory_service.py       # 3-Tier Cognitive Memory Engine (Working, Episodic, Archive)
+│       ├── gmail_service.py        # Gmail API OAuth client & message ingester
+│       ├── whatsapp_service.py     # Beeper SQLite snapshot ingester & contact resolver
+│       └── outlook_service.py      # Microsoft Graph API client (College mail integration)
 ├── data/
-│   └── assistant.duckdb            # Local embedded DuckDB database (emails, briefings)
+│   └── assistant.duckdb            # Local embedded DuckDB database (emails, messages, briefings)
 ├── frontend/
 │   ├── index.html                  # Modern responsive chat interface
 │   ├── manifest.json               # PWA configuration for mobile home screen installation
@@ -45,9 +49,11 @@ localai/
 ├── .env                            # Active environment configuration
 ├── requirements.txt                # Python dependencies
 ├── authenticate_gmail.py           # One-time Google OAuth authorization helper
+├── authenticate_outlook.py         # One-time Microsoft OAuth authorization helper
 ├── pair.py                         # Device pairing utility (QR code & link generator)
 ├── run.py                          # Application launcher
 └── README.md
+
 ```
 
 ---
@@ -109,7 +115,7 @@ MODEL_REASONING=qwen3.5:2b     # Deep reasoning model (logic, math, code analysi
 DEFAULT_SYSTEM_PROMPT="You are an intelligent, proactive personal AI assistant. Be concise, helpful, and clear."
 DEFAULT_TEMPERATURE=0.7
 
-AUTHORIZED_DEVICE_TOKENS=dev_a87f2b1c4e90d3e5f6a1b2c3d4e5f607
+AUTHORIZED_DEVICE_TOKENS=your_secret_device_token
 ```
 
 ### 3. Start the Server
@@ -135,7 +141,7 @@ python pair.py --url https://your-tunnel.ngrok-free.app
 ### 1. On Your Other Laptop Browser:
 Just open the printed link:
 ```
-http://<server-ip>:8000/?token=dev_a87f2b1c4e90d3e5f6a1b2c3d4e5f607
+http://<server-ip>:8000/?token=your_secret_device_token
 ```
 It will automatically save your token into `localStorage` and clear the token from the URL bar. You're ready to chat!
 
@@ -154,7 +160,22 @@ It will automatically save your token into `localStorage` and clear the token fr
 * **Terminal Stream (curl -N):**
   ```bash
   curl -N -X POST "http://localhost:8000/chat" \
-       -H "X-Device-Token: dev_a87f2b1c4e90d3e5f6a1b2c3d4e5f607" \
+       -H "X-Device-Token: your_secret_device_token" \
        -H "Content-Type: application/json" \
        -d '{"message": "Give me 3 productivity tips"}'
   ```
+
+---
+
+## 🔌 Integrations & Data Ingestion Status
+
+| Source | Status | Storage / Memory Tier | Notes |
+| :--- | :--- | :--- | :--- |
+| **Gmail** | 🟢 **Active** | DuckDB `emails` table + Working Memory (<48h) | Google OAuth device flow. Full inbox search & summaries. |
+| **WhatsApp (Beeper)** | 🟢 **Active** | DuckDB `messages` table (3-Tier Engine) | Reads local SQLite store (`index.db`), auto-resolves 1-on-1 participant names, segments into Working (<48h), Episodic (2–30d), and Long-Term (>30d). |
+| **Outlook / College Mail** | 🟡 **On Hold (Tenant Restricted)** | Standby (`app/services/outlook_service.py`) | **University Policy Restriction:** Many university/organizational Microsoft 365 tenants require Tenant Admin consent for Microsoft Graph `Mail.Read`. Student self-registered Azure apps are often blocked with `AADSTS65002` / `Need admin approval`. |
+
+### Outlook / College Mail Fallback Solutions:
+1. **Auto-Forwarding Rule (Recommended):** Set an inbox forwarding rule in college webmail (`outlook.office.com`) to redirect incoming emails to your connected Gmail account. The assistant automatically tags emails from your college domain as `source: college`.
+2. **Windows Desktop Outlook (COM):** Local Python script querying the desktop Outlook client directly on Windows (bypassing cloud API & tenant restrictions).
+

@@ -11,17 +11,29 @@ from app.services.memory_service import memory_service
 
 logger = logging.getLogger(__name__)
 
+import glob
+
 def get_beeper_db_path() -> str:
-    """Detects Beeper index.db across native Windows and WSL environments."""
-    candidate_paths = [
-        os.path.expandvars(r"%APPDATA%\BeeperTexts\index.db"),
-        r"C:\Users\Ashwin V\AppData\Roaming\BeeperTexts\index.db",
-        "/mnt/c/Users/Ashwin V/AppData/Roaming/BeeperTexts/index.db",
-    ]
-    for p in candidate_paths:
+    """Detects Beeper index.db dynamically across Windows and WSL without exposing usernames."""
+    # 1. Optional explicit override via .env
+    custom_path = os.getenv("BEEPER_DB_PATH")
+    if custom_path and os.path.exists(custom_path):
+        return custom_path
+
+    # 2. Native Windows environment (%APPDATA%)
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        p = os.path.join(appdata, "BeeperTexts", "index.db")
         if os.path.exists(p):
             return p
-    return candidate_paths[0]
+
+    # 3. WSL environment: dynamically search across mounted Windows user profiles
+    wsl_candidates = glob.glob("/mnt/c/Users/*/AppData/Roaming/BeeperTexts/index.db")
+    for candidate in wsl_candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return ""
 
 
 DEFAULT_BEEPER_DB_PATH = get_beeper_db_path()
@@ -111,18 +123,33 @@ class WhatsAppService:
                     if contact_name:
                         threads_map[room_id] = contact_name
 
-            # 2. Fetch all messages
-            cursor.execute("""
-                SELECT id, roomID, senderContactID, timestamp, isSentByMe, message
-                FROM mx_room_messages
-                WHERE message IS NOT NULL
-                ORDER BY timestamp ASC;
-            """)
+            # First, age existing messages across memory tiers
+            memory_service.refresh_message_memory_tiers()
+
+            # Check latest stored message timestamp to do fast incremental sync
+            latest_ts = memory_service.get_latest_message_timestamp(source="whatsapp")
+            if latest_ts and latest_ts > 0:
+                # 5-minute safety overlap to catch any slightly out-of-order writes
+                cutoff_ms = latest_ts - (5 * 60 * 1000)
+                cursor.execute("""
+                    SELECT id, roomID, senderContactID, timestamp, isSentByMe, message
+                    FROM mx_room_messages
+                    WHERE message IS NOT NULL AND timestamp >= ?
+                    ORDER BY timestamp ASC;
+                """, (cutoff_ms,))
+            else:
+                cursor.execute("""
+                    SELECT id, roomID, senderContactID, timestamp, isSentByMe, message
+                    FROM mx_room_messages
+                    WHERE message IS NOT NULL
+                    ORDER BY timestamp ASC;
+                """)
+
             raw_rows = cursor.fetchall()
             conn.close()
 
             if not raw_rows:
-                return {"success": True, "synced_count": 0, "message": "No messages found in Beeper store."}
+                return {"success": True, "synced_count": 0, "message": "No new messages found in Beeper store."}
 
             now_sec = time.time()
             working_cutoff = now_sec - (48 * 3600)        # 48 hours ago

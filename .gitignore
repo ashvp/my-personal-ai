@@ -1,13 +1,24 @@
+# Python Virtual Environment
+venv/
 /venv
+__pycache__/
+*.pyc
 
+# Local Environment & Secrets (NEVER COMMIT)
 .env
+credentials.json
+token.json
+outlook_token.json
 .env.example
 
-run.py
-__pycache__/
+# Local Databases & Dynamic Data
+data/
+*.duckdb*
+*.db
+*.wal
+*.shm
+/tmp/
 
-credentials.json
-
-token.json
-
-data/assistant.duckdb
+# System files
+.DS_Store
+Thumbs.db
