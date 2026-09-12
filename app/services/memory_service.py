@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy import create_engine, select, or_, update, func, text
 from sqlalchemy.orm import sessionmaker, scoped_session
 
-from app.models.memory import Base, Email, Message, IntermediateMemory, ChatHistory
+from app.models.memory import Base, Email, Message, IntermediateMemory, ChatHistory, Contact
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +343,123 @@ class MemoryService:
             return [{"role": r.role, "content": r.content} for r in results]
         finally:
             session.close()
+
+    # --- Contacts & Cellular Dialing Memory ---
+
+    def store_contacts_batch(self, contacts: List[Dict[str, Any]]) -> int:
+        """Batch upserts contacts into DuckDB using SQLAlchemy ORM merging."""
+        if not contacts:
+            return 0
+
+        session = self.get_session()
+        saved_count = 0
+        try:
+            for c in contacts:
+                contact_obj = Contact(
+                    id=c.get("id"),
+                    name=c.get("name", "Unknown"),
+                    phone_number=c.get("phone_number", ""),
+                    source=c.get("source", "beeper")
+                )
+                session.merge(contact_obj)
+                saved_count += 1
+            session.commit()
+            logger.info(f"SQLAlchemy batch merged {saved_count} contacts into DuckDB.")
+            return saved_count
+        except Exception as exc:
+            session.rollback()
+            logger.exception(f"Error in SQLAlchemy store_contacts_batch: {exc}")
+            return 0
+        finally:
+            session.close()
+
+    def get_contact_count(self) -> int:
+        """Returns total number of contacts stored in DuckDB."""
+        session = self.get_session()
+        try:
+            stmt = select(func.count(Contact.id))
+            return session.scalar(stmt) or 0
+        finally:
+            session.close()
+
+    def search_contacts(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Searches contacts by name or phone number."""
+        session = self.get_session()
+        try:
+            clean_q = query.strip()
+            if not clean_q:
+                return []
+            pattern = f"%{clean_q}%"
+            stmt = (
+                select(Contact)
+                .where(
+                    or_(
+                        Contact.name.ilike(pattern),
+                        Contact.phone_number.ilike(pattern)
+                    )
+                )
+                .limit(limit)
+            )
+            results = session.scalars(stmt).all()
+            return [c.to_dict() for c in results]
+        finally:
+            session.close()
+
+    def find_contact(self, name_or_query: str) -> Optional[Dict[str, Any]]:
+        """Finds the best matching contact for a call or messaging request.
+        
+        Handles voice/chat phrasing like 'Call Madhu', 'dial Prasad Appa', etc.
+        Prioritizes:
+        1. Exact name match (case-insensitive)
+        2. Name starts-with
+        3. Word/substring match, prioritizing real names over raw numbers
+        """
+        session = self.get_session()
+        try:
+            clean = name_or_query.strip()
+            # Strip common action verbs
+            for prefix in ["call to ", "call ", "ring to ", "ring ", "dial ", "phone ", "to ", "my "]:
+                if clean.lower().startswith(prefix):
+                    clean = clean[len(prefix):].strip()
+                    break
+
+            if not clean:
+                return None
+
+            lower_clean = clean.lower()
+
+            # 1. Exact match on name
+            stmt_exact = select(Contact).where(func.lower(Contact.name) == lower_clean)
+            exact = session.scalars(stmt_exact).first()
+            if exact:
+                return exact.to_dict()
+
+            # 2. Starts with name
+            stmt_starts = select(Contact).where(Contact.name.ilike(f"{clean}%"))
+            starts = session.scalars(stmt_starts).first()
+            if starts:
+                return starts.to_dict()
+
+            # 3. Substring / contains match
+            stmt_contains = select(Contact).where(Contact.name.ilike(f"%{clean}%"))
+            matches = list(session.scalars(stmt_contains).all())
+            if matches:
+                # Prioritize real names over entries where name is a raw phone number
+                named_matches = [m for m in matches if not m.name.startswith("+")]
+                if named_matches:
+                    return named_matches[0].to_dict()
+                return matches[0].to_dict()
+
+            # 4. Try matching phone number directly
+            stmt_phone = select(Contact).where(Contact.phone_number.ilike(f"%{clean}%"))
+            phone_match = session.scalars(stmt_phone).first()
+            if phone_match:
+                return phone_match.to_dict()
+
+            return None
+        finally:
+            session.close()
+
 
 
 memory_service = MemoryService()

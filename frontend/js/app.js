@@ -401,6 +401,20 @@ clearChatBtn.addEventListener('click', () => {
   }
 });
 
+// Communication link handler (tel:, sms:, wa.me)
+chatMessages.addEventListener('click', (e) => {
+  const link = e.target.closest('a');
+  if (!link) return;
+
+  const href = link.getAttribute('href') || '';
+  if (href.startsWith('tel:')) {
+    if (navigator.vibrate) navigator.vibrate(30);
+  } else if (href.startsWith('https://wa.me') || href.startsWith('http')) {
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
 // Prompt suggestions click handler
 window.fillPrompt = function(promptText) {
   messageInput.value = promptText;

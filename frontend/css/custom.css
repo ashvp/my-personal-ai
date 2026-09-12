@@ -151,3 +151,76 @@ details.thinking-box summary::-webkit-details-marker {
 .safe-bottom {
   padding-bottom: max(1rem, env(safe-area-inset-bottom));
 }
+
+/* 1-Tap Calling & Quick Messaging Buttons */
+.markdown-body a[href^="tel:"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, #059669, #10b981);
+  color: #ffffff !important;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 0.65rem 1.25rem;
+  border-radius: 0.85rem;
+  text-decoration: none !important;
+  margin: 0.6rem 0;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: 0.01em;
+}
+
+.markdown-body a[href^="tel:"]:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.55);
+  background: linear-gradient(135deg, #047857, #059669);
+}
+
+.markdown-body a[href^="tel:"]:active {
+  transform: translateY(0);
+}
+
+.markdown-body a[href^="https://wa.me"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #86efac !important;
+  font-weight: 500;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.65rem;
+  text-decoration: none !important;
+  margin: 0.25rem 0.25rem 0.25rem 0;
+  transition: all 0.2s ease;
+}
+
+.markdown-body a[href^="https://wa.me"]:hover {
+  background: rgba(34, 197, 94, 0.25);
+  border-color: rgba(34, 197, 94, 0.6);
+  transform: translateY(-1px);
+}
+
+.markdown-body a[href^="sms:"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  color: #a5b4fc !important;
+  font-weight: 500;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.65rem;
+  text-decoration: none !important;
+  margin: 0.25rem 0.25rem 0.25rem 0;
+  transition: all 0.2s ease;
+}
+
+.markdown-body a[href^="sms:"]:hover {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.6);
+  transform: translateY(-1px);
+}
+

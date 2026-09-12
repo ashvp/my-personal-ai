@@ -9,6 +9,7 @@ from app.config import settings
 from app.schemas.chat import ChatResponse
 from app.services.memory_service import memory_service
 from app.services.triage_service import triage_service
+from app.services.contacts_service import contacts_service
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,8 @@ def get_wsl_host_ip() -> Optional[str]:
 
 CLASSIFIER_FEW_SHOT_SYSTEM = (
     "You are a fast intent classifier for a personal AI assistant.\n"
-    "Classify the user's message into exactly ONE of the following 5 categories:\n"
+    "Classify the user's message into exactly ONE of the following 6 categories:\n"
+    "- CALL_CONTACT: Requesting to phone, call, ring, dial, or get contact info / 1-tap call action for a person or friend (e.g., 'Call Madhu', 'Ring Prasad Appa', 'Dial mom', 'What is Madhu's number?').\n"
     "- DAILY_BRIEFING: Requesting daily updates, morning briefings, schedule, agenda, overview of the day, or what needs to be done.\n"
     "- MESSAGE_LOOKUP: Searching, checking, or reading WhatsApp messages, texts, chats, or conversations.\n"
     "- EMAIL_LOOKUP: Searching, checking, counting, or reading emails, inboxes, or mail messages.\n"
@@ -40,6 +42,18 @@ CLASSIFIER_FEW_SHOT_SYSTEM = (
 CLASSIFIER_FEW_SHOT_MESSAGES = [
     {"role": "system", "content": CLASSIFIER_FEW_SHOT_SYSTEM},
     # Few-shot examples:
+    {"role": "user", "content": "Call Madhu."},
+    {"role": "assistant", "content": "CALL_CONTACT"},
+    {"role": "user", "content": "Ring Prasad Appa"},
+    {"role": "assistant", "content": "CALL_CONTACT"},
+    {"role": "user", "content": "Dial Chitra Amma"},
+    {"role": "assistant", "content": "CALL_CONTACT"},
+    {"role": "user", "content": "Phone Rachit Agarwal"},
+    {"role": "assistant", "content": "CALL_CONTACT"},
+    {"role": "user", "content": "What is Madhu's phone number?"},
+    {"role": "assistant", "content": "CALL_CONTACT"},
+    {"role": "user", "content": "Can you call my dad?"},
+    {"role": "assistant", "content": "CALL_CONTACT"},
     {"role": "user", "content": "Give me updates for the day."},
     {"role": "assistant", "content": "DAILY_BRIEFING"},
     {"role": "user", "content": "Morning briefing."},
@@ -137,7 +151,9 @@ class OllamaLLMService:
                 if response.status_code == 200:
                     data = response.json()
                     raw = data.get("message", {}).get("content", "").strip().upper()
-                    if "DAILY_BRIEFING" in raw:
+                    if "CALL_CONTACT" in raw:
+                        intent = "CALL_CONTACT"
+                    elif "DAILY_BRIEFING" in raw:
                         intent = "DAILY_BRIEFING"
                     elif "MESSAGE_LOOKUP" in raw:
                         intent = "MESSAGE_LOOKUP"
@@ -155,8 +171,11 @@ class OllamaLLMService:
                 continue
 
         # Heuristic fallback if router network or models hiccup
-        lower = user_prompt.lower()
-        if any(w in lower for w in ["briefing", "update for the day", "updates for the day", "today's update", "todays update", "on my plate", "on my radar", "agenda", "what do i have to do"]):
+        lower = user_prompt.lower().strip()
+        if any(lower.startswith(p) for p in ["call ", "ring ", "dial ", "phone "]) or any(w in lower for w in ["phone number of", "call to ", "phone number for", "contact details of"]):
+            logger.info(f"[Intent Fallback] Detected CALL_CONTACT via heuristic keywords for: '{user_prompt[:40]}'")
+            return "CALL_CONTACT"
+        elif any(w in lower for w in ["briefing", "update for the day", "updates for the day", "today's update", "todays update", "on my plate", "on my radar", "agenda", "what do i have to do"]):
             logger.info(f"[Intent Fallback] Detected DAILY_BRIEFING via heuristic keywords for: '{user_prompt[:40]}'")
             return "DAILY_BRIEFING"
         elif any(w in lower for w in ["whatsapp", "text", "message", "chat"]):
@@ -175,6 +194,17 @@ class OllamaLLMService:
         temperature: Optional[float] = None
     ) -> tuple[str, str, float]:
         """Prepares the destination model, focused system prompt, and temperature based on intent."""
+
+        # 0. CALL_CONTACT: Instant 1-tap cellular dialer card
+        if intent == "CALL_CONTACT":
+            model = self.fast_model
+            temp = 0.1
+            card = contacts_service.generate_call_card_markdown(prompt)
+            sys_prompt = (
+                "You are a personal AI phone assistant. The user wants to call or contact someone.\n"
+                f"Present the following verified contact card directly without altering the phone numbers:\n\n{card}"
+            )
+            return model, sys_prompt, temp
 
         # 1. DAILY_BRIEFING: Intelligent multi-modal cognitive triage (Schedule -> People -> Promos)
         if intent == "DAILY_BRIEFING":
@@ -314,6 +344,15 @@ class OllamaLLMService:
     ) -> ChatResponse:
         """Blocking reply method with dynamic 3-model intent routing."""
         intent = await self.classify_intent(prompt)
+        if intent == "CALL_CONTACT":
+            card = await contacts_service.initiate_call_card(prompt)
+            return ChatResponse(
+                reply=card,
+                thinking="Looking up verified contact and placing autonomous cellular call...",
+                model=f"Autonomous Call Engine [{intent}]",
+                total_duration_seconds=0.15
+            )
+
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
             prompt, intent, system_prompt, temperature
         )
@@ -394,6 +433,13 @@ class OllamaLLMService:
     ) -> AsyncGenerator[str, None]:
         """Real-time SSE token stream generator with dynamic 3-model intent routing."""
         intent = await self.classify_intent(prompt)
+        if intent == "CALL_CONTACT":
+            yield f"data: {json.dumps({'type': 'thinking', 'token': 'Looking up contact and placing autonomous cellular call on phone SIM...', 'done': False})}\n\n"
+            card = await contacts_service.initiate_call_card(prompt)
+            yield f"data: {json.dumps({'type': 'answer', 'token': card, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'token': '', 'done': True, 'model': f'Autonomous Call Engine [{intent}]', 'intent': intent, 'total_duration_seconds': 0.15})}\n\n"
+            return
+
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
             prompt, intent, system_prompt, temperature
         )

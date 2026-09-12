@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     APPLICATION_ID_OUTLOOK: str = ""
     DIRECTORY_ID_OUTLOOK: str = ""
 
+    # MacroDroid Autonomous Cellular Calling Webhook (loaded from .env)
+    MACRODROID_WEBHOOK_URL: Optional[str] = None
+
     def get_authorized_tokens(self) -> Set[str]:
         if not self.AUTHORIZED_DEVICE_TOKENS:
             return set()

@@ -111,3 +111,22 @@ class ChatHistory(Base):
             "content": self.content,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
+
+
+class Contact(Base):
+    __tablename__ = "contacts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, index=True)
+    phone_number: Mapped[str] = mapped_column(String)
+    source: Mapped[str] = mapped_column(String, default="beeper")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "phone_number": self.phone_number,
+            "source": self.source
+        }
+

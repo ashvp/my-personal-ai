@@ -7,6 +7,7 @@ from app.config import settings
 from app.services.gmail_service import gmail_service
 from app.services.whatsapp_service import whatsapp_service
 from app.services.sms_service import sms_service
+from app.services.contacts_service import contacts_service
 from app.services.outlook_service import outlook_service
 
 logger = logging.getLogger(__name__)
@@ -137,7 +138,23 @@ class BackgroundSyncService:
                 logger.error(f"Error during Google SMS background sync: {exc}")
                 results["sms"] = {"status": "error", "error": str(exc), "synced_count": 0}
 
-            # 4. Sync Outlook (if configured)
+            # 4. Sync Contacts (Beeper SQLite)
+            try:
+                if contacts_service.is_available():
+                    c_res = await asyncio.to_thread(contacts_service.sync_contacts)
+                    results["contacts"] = {
+                        "status": "success" if c_res.get("success") else "failed",
+                        "synced_count": c_res.get("synced_count", 0),
+                        "named_contacts": c_res.get("named_contacts", 0),
+                        "message": c_res.get("message", "")
+                    }
+                else:
+                    results["contacts"] = {"status": "not_available", "synced_count": 0}
+            except Exception as exc:
+                logger.error(f"Error during Contacts background sync: {exc}")
+                results["contacts"] = {"status": "error", "error": str(exc), "synced_count": 0}
+
+            # 5. Sync Outlook (if configured)
             try:
                 if outlook_service.is_authenticated():
                     o_res = await outlook_service.sync_emails(max_results=15)
@@ -178,6 +195,7 @@ class BackgroundSyncService:
                 "gmail_authenticated": gmail_service.is_authenticated(),
                 "whatsapp_available": whatsapp_service.is_available(),
                 "sms_available": sms_service.is_available(),
+                "contacts_available": contacts_service.is_available(),
                 "outlook_authenticated": outlook_service.is_authenticated()
             }
 
