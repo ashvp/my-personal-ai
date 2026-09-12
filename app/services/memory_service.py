@@ -428,6 +428,20 @@ class MemoryService:
 
             lower_clean = clean.lower()
 
+            # Expand family relationship aliases
+            alias_map = {
+                "dad": ["appa", "papa", "dad", "father"],
+                "father": ["appa", "papa", "dad"],
+                "mom": ["amma", "mom", "mother", "maa"],
+                "mother": ["amma", "mom", "mother", "maa"],
+            }
+            if lower_clean in alias_map:
+                for alias in alias_map[lower_clean]:
+                    stmt_alias = select(Contact).where(Contact.name.ilike(f"%{alias}%"))
+                    alias_match = session.scalars(stmt_alias).first()
+                    if alias_match:
+                        return alias_match.to_dict()
+
             # 1. Exact match on name
             stmt_exact = select(Contact).where(func.lower(Contact.name) == lower_clean)
             exact = session.scalars(stmt_exact).first()

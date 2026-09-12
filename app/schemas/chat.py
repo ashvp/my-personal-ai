@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -11,6 +11,10 @@ class ChatRequest(BaseModel):
     stream: bool = Field(
         default=True,
         description="Stream tokens in real-time via Server-Sent Events (SSE). Set to False for a single JSON response."
+    )
+    history: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="Recent conversation turns [{'role': 'user'|'assistant', 'content': '...'}]"
     )
 
 

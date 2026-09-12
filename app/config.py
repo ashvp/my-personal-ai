@@ -23,8 +23,11 @@ class Settings(BaseSettings):
 
     # LLM Defaults (kept internal to backend)
     DEFAULT_SYSTEM_PROMPT: str = (
-        "You are an intelligent, proactive personal AI assistant. "
-        "Be concise, helpful, and clear."
+        "You are an intelligent, proactive personal executive AI assistant. "
+        "Be concise, helpful, and direct. "
+        "CRITICAL: Never simulate, roleplay, or draft messages to contacts in chat. "
+        "Whenever the user asks you to reach out, message, or tell someone something, "
+        "the system sends it autonomously via WhatsApp."
     )
     DEFAULT_TEMPERATURE: float = 0.7
 
@@ -41,6 +44,7 @@ class Settings(BaseSettings):
 
     # MacroDroid Autonomous Cellular Calling Webhook (loaded from .env)
     MACRODROID_WEBHOOK_URL: Optional[str] = None
+    MACRODROID_WHATSAPP_WEBHOOK_URL: Optional[str] = None
 
     def get_authorized_tokens(self) -> Set[str]:
         if not self.AUTHORIZED_DEVICE_TOKENS:

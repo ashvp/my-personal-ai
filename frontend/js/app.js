@@ -17,6 +17,7 @@ const welcomeCard = document.getElementById('welcomeCard');
 // State
 let currentAbortController = null;
 let isGenerating = false;
+let conversationHistory = [];
 
 // 1. Authentication & Token Handling
 function getStoredToken() {
@@ -82,6 +83,16 @@ saveTokenBtn.addEventListener('click', () => {
 
 tokenSettingsBtn.addEventListener('click', openAuthModal);
 authStatusBadge.addEventListener('click', openAuthModal);
+
+if (clearChatBtn) {
+  clearChatBtn.addEventListener('click', () => {
+    if (confirm('Clear chat conversation?')) {
+      conversationHistory = [];
+      chatMessages.innerHTML = '';
+      if (welcomeCard) welcomeCard.style.display = 'block';
+    }
+  });
+}
 
 const syncGmailBtn = document.getElementById('syncGmailBtn');
 const syncGmailIcon = document.getElementById('syncGmailIcon');
@@ -256,6 +267,9 @@ messageForm.addEventListener('submit', async (e) => {
     node.thinkingTimer.textContent = `${elapsedSec}s`;
   }, 200);
 
+  const historyPayload = conversationHistory.slice(-12);
+  conversationHistory.push({ role: 'user', content: text });
+
   try {
     const response = await fetch('/chat', {
       method: 'POST',
@@ -265,7 +279,8 @@ messageForm.addEventListener('submit', async (e) => {
       },
       body: JSON.stringify({
         message: text,
-        stream: true
+        stream: true,
+        history: historyPayload
       }),
       signal: currentAbortController.signal
     });
@@ -337,6 +352,11 @@ messageForm.addEventListener('submit', async (e) => {
             node.answerBody.classList.remove('typing-cursor');
             node.thinkingSpinner.classList.add('hidden');
             node.thinkingDetails.classList.remove('thinking-active');
+
+            if (answerAccumulator) {
+              conversationHistory.push({ role: 'assistant', content: answerAccumulator });
+              if (conversationHistory.length > 20) conversationHistory = conversationHistory.slice(-20);
+            }
 
             const totalSec = payload.total_duration_seconds || ((Date.now() - startTime) / 1000).toFixed(1);
             node.footerMeta.textContent = `${totalSec}s • ${payload.model || 'qwen'}`;

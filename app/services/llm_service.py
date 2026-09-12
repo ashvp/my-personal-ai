@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 from typing import Dict, Any, List, Optional, AsyncGenerator
@@ -27,78 +28,227 @@ def get_wsl_host_ip() -> Optional[str]:
     return None
 
 
-CLASSIFIER_FEW_SHOT_SYSTEM = (
-    "You are a fast intent classifier for a personal AI assistant.\n"
-    "Classify the user's message into exactly ONE of the following 6 categories:\n"
-    "- CALL_CONTACT: Requesting to phone, call, ring, dial, or get contact info / 1-tap call action for a person or friend (e.g., 'Call Madhu', 'Ring Prasad Appa', 'Dial mom', 'What is Madhu's number?').\n"
-    "- DAILY_BRIEFING: Requesting daily updates, morning briefings, schedule, agenda, overview of the day, or what needs to be done.\n"
-    "- MESSAGE_LOOKUP: Searching, checking, or reading WhatsApp messages, texts, chats, or conversations.\n"
-    "- EMAIL_LOOKUP: Searching, checking, counting, or reading emails, inboxes, or mail messages.\n"
-    "- DEEP_REASON: Complex logic, code debugging, math problems, multi-step planning, or in-depth analytical reasoning.\n"
-    "- FAST_CHAT: General conversation, greetings, drafting emails/replies, writing, summarization, casual questions, and quick everyday tasks.\n\n"
-    "Respond with ONLY the category name. Do not explain or include any other text."
-)
+def _convert_pronouns(text: str) -> str:
+    """Converts 3rd-person references referring to the recipient into 2nd-person."""
+    text = re.sub(r"\bon\s+(?:his|her|their)\s+way\b", "on your way", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bwith\s+(?:him|her|them)\b", "with you", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bto\s+(?:him|her|them)\b", "to you", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfor\s+(?:him|her|them)\b", "for you", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:his|her|their)\s+(car|keys|phone|charger|office|house|home|bag|laptop|wallet|turn|place|side)\b", r"your \1", text, flags=re.IGNORECASE)
+    return text
 
-CLASSIFIER_FEW_SHOT_MESSAGES = [
-    {"role": "system", "content": CLASSIFIER_FEW_SHOT_SYSTEM},
-    # Few-shot examples:
-    {"role": "user", "content": "Call Madhu."},
-    {"role": "assistant", "content": "CALL_CONTACT"},
-    {"role": "user", "content": "Ring Prasad Appa"},
-    {"role": "assistant", "content": "CALL_CONTACT"},
-    {"role": "user", "content": "Dial Chitra Amma"},
-    {"role": "assistant", "content": "CALL_CONTACT"},
-    {"role": "user", "content": "Phone Rachit Agarwal"},
-    {"role": "assistant", "content": "CALL_CONTACT"},
-    {"role": "user", "content": "What is Madhu's phone number?"},
-    {"role": "assistant", "content": "CALL_CONTACT"},
-    {"role": "user", "content": "Can you call my dad?"},
-    {"role": "assistant", "content": "CALL_CONTACT"},
-    {"role": "user", "content": "Give me updates for the day."},
-    {"role": "assistant", "content": "DAILY_BRIEFING"},
-    {"role": "user", "content": "Morning briefing."},
-    {"role": "assistant", "content": "DAILY_BRIEFING"},
-    {"role": "user", "content": "What's on my radar today?"},
-    {"role": "assistant", "content": "DAILY_BRIEFING"},
-    {"role": "user", "content": "Brief me on my day."},
-    {"role": "assistant", "content": "DAILY_BRIEFING"},
-    {"role": "user", "content": "What do I have to do today?"},
-    {"role": "assistant", "content": "DAILY_BRIEFING"},
-    {"role": "user", "content": "Give me an executive briefing of my day."},
-    {"role": "assistant", "content": "DAILY_BRIEFING"},
-    {"role": "user", "content": "What was my last WhatsApp message?"},
-    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
-    {"role": "user", "content": "What did Rahul text me yesterday?"},
-    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
-    {"role": "user", "content": "Did anyone message me about the Goa trip?"},
-    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
-    {"role": "user", "content": "Check my recent chats for the WiFi password."},
-    {"role": "assistant", "content": "MESSAGE_LOOKUP"},
-    {"role": "user", "content": "What was my last email?"},
-    {"role": "assistant", "content": "EMAIL_LOOKUP"},
-    {"role": "user", "content": "Did Google reply to my job application?"},
-    {"role": "assistant", "content": "EMAIL_LOOKUP"},
-    {"role": "user", "content": "Check my inbox for flight tickets or confirmation numbers."},
-    {"role": "assistant", "content": "EMAIL_LOOKUP"},
-    {"role": "user", "content": "How many unread emails do I have from today?"},
-    {"role": "assistant", "content": "EMAIL_LOOKUP"},
-    {"role": "user", "content": "Draft a polite reply saying I will review the proposal by tomorrow."},
-    {"role": "assistant", "content": "FAST_CHAT"},
-    {"role": "user", "content": "Summarize these meeting notes in 3 bullet points."},
-    {"role": "assistant", "content": "FAST_CHAT"},
-    {"role": "user", "content": "Hello, how are you? What can you do?"},
-    {"role": "assistant", "content": "FAST_CHAT"},
-    {"role": "user", "content": "Write a quick caption for an Instagram post about coffee."},
-    {"role": "assistant", "content": "FAST_CHAT"},
-    {"role": "user", "content": "Analyze the time complexity and memory overhead of these two distributed consensus algorithms."},
-    {"role": "assistant", "content": "DEEP_REASON"},
-    {"role": "user", "content": "There is a subtle race condition in this mutex lock code, debug it step-by-step."},
-    {"role": "assistant", "content": "DEEP_REASON"},
-    {"role": "user", "content": "Solve this riddle: If three frogs jump across five stones under specific constraints..."},
-    {"role": "assistant", "content": "DEEP_REASON"},
-    {"role": "user", "content": "Compare the tax implications of stock options vs RSUs across different vesting schedules."},
-    {"role": "assistant", "content": "DEEP_REASON"},
-]
+
+def clean_interpreted_message(raw_msg: str) -> str:
+    """Cleans up raw message extractions, removing third-person meta-framing,
+    fixing pronouns, and converting imperative requests into polite direct speech.
+    
+    Examples:
+      'him to come early' -> 'Please come early.'
+      'to buy milk on his way' -> 'Please buy milk on your way.'
+      'him not to wait for dinner' -> 'Please do not wait for dinner.'
+      'that I will be 15 mins late' -> 'I will be 15 mins late.'
+      'if he reached safely' -> 'Did you reach safely?'
+    """
+    if not raw_msg:
+        return ""
+
+    text = raw_msg.strip().strip('"\'')
+    if not text:
+        return ""
+
+    # Strip conversational meta-intents at the start
+    meta_prefixes = [
+        r"^(?:please\s+)?(?:tell|text|message|ask|inform)\s+(?:him|her|them|someone)\s+(?:to\s+)?",
+        r"^(?:telling|saying|asking|informing)\s+(?:(?:him|her|them|someone)\s+)?(?:to\s+|that\s+)?",
+        r"^(?:saying\s+that|telling\s+that)\s+",
+        r"^(?:saying|telling)\s+",
+    ]
+    for pattern in meta_prefixes:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+
+    # Handle negative commands: "him not to...", "her not to...", "not to...", "don't..."
+    neg_match = re.match(r"^(?:(?:him|her|them|me)\s+)?(?:not\s+to|don't\s+to|dont\s+to|don't|dont)\s+(.+)$", text, re.IGNORECASE)
+    if neg_match:
+        body = neg_match.group(1).strip()
+        body = _convert_pronouns(body)
+        return f"Please do not {body.rstrip('.')}."
+
+    # Handle "him to ...", "her to ...", "them to ...", "me to ...", "to ..."
+    to_match = re.match(r"^(?:(?:him|her|them|me)\s+)?to\s+(.+)$", text, re.IGNORECASE)
+    if to_match:
+        text = to_match.group(1).strip()
+    else:
+        # Also handle bare "him that ...", "her that ..." or "that ..."
+        that_match = re.match(r"^(?:(?:him|her|them|me)\s+)?that\s+(.+)$", text, re.IGNORECASE)
+        if that_match:
+            text = that_match.group(1).strip()
+        else:
+            # Handle stray leading pronouns: "him ...", "her ..."
+            pronoun_lead = re.match(r"^(?:him|her|them)\s+(.+)$", text, re.IGNORECASE)
+            if pronoun_lead:
+                text = pronoun_lead.group(1).strip()
+
+    # Handle auxiliary questions: "if he/she/they ...", "whether he/she/they ..."
+    aux_match = re.match(r"^(?:if|whether)\s+(?:he|she|they|you)\s+(has|have|is|are|was|were|can|could|will|would)\s+(.+)$", text, re.IGNORECASE)
+    if aux_match:
+        aux = aux_match.group(1).lower()
+        rest = aux_match.group(2).strip().rstrip("?.")
+        aux_map = {"has": "have", "is": "are", "was": "were"}
+        aux_2nd = aux_map.get(aux, aux).capitalize()
+        rest = _convert_pronouns(rest)
+        return f"{aux_2nd} you {rest}?"
+
+    # Handle simple past question: "if he reached safely" -> "Did you reach safely?"
+    q_simple = re.match(r"^(?:if|whether)\s+(?:he|she|they)\s+(.+)$", text, re.IGNORECASE)
+    if q_simple:
+        rest = q_simple.group(1).strip()
+        rest = _convert_pronouns(rest)
+        words = rest.split()
+        if words:
+            first_w = words[0].lower()
+            past_to_base = {"reached": "reach", "came": "come", "got": "get", "left": "leave", "called": "call", "finished": "finish"}
+            if first_w in past_to_base:
+                words[0] = past_to_base[first_w]
+                return f"Did you {' '.join(words).rstrip('?.')}?"
+            elif first_w.endswith("ed"):
+                base = first_w[:-2] if not first_w.endswith("eed") else first_w[:-1]
+                words[0] = base
+                return f"Did you {' '.join(words).rstrip('?.')}?"
+        return f"Did you {rest.rstrip('?.')}?"
+
+    # Convert remaining pronouns
+    text = _convert_pronouns(text)
+
+    # Imperative verb detection
+    words = text.split()
+    if words:
+        first = words[0].lower()
+        first_person_starts = {
+            "i", "i'm", "im", "i've", "ive", "i'll", "ill", "we", "we're", "we'll",
+            "please", "can", "could", "would", "will", "are", "is", "did", "do",
+            "hey", "hi", "hello", "sorry", "thanks", "thank", "good", "happy", "yes", "no", "ok", "okay"
+        }
+        imperative_verbs = {
+            "come", "bring", "buy", "pick", "call", "send", "inform", "reach", "get", "check",
+            "take", "give", "wait", "meet", "remind", "let", "order", "start", "finish", "stop",
+            "leave", "drop", "make", "help", "pay", "share", "forward", "update", "tell", "ask",
+            "see", "show", "open", "close", "turn", "switch", "keep", "hold", "stay", "go"
+        }
+        if first in imperative_verbs:
+            words[0] = words[0].lower()
+            text = "Please " + " ".join(words)
+        elif first == "i" or text.startswith("i "):
+            text = "I " + text[2:]
+        elif first in ("i'm", "im"):
+            text = "I'm " + (" ".join(words[1:]) if len(words) > 1 else "")
+        elif first not in first_person_starts and not text.startswith("Please"):
+            text = text[0].upper() + text[1:]
+        else:
+            text = text[0].upper() + text[1:]
+
+    # Ensure ending punctuation
+    if text and text[-1] not in (".", "?", "!"):
+        if any(text.lower().startswith(q) for q in ["did ", "are ", "is ", "can ", "could ", "what ", "where ", "when ", "why ", "how ", "have ", "will "]):
+            text += "?"
+        else:
+            text += "."
+
+    return text
+
+
+def extract_followup_intent(prompt: str, history: Optional[List[Dict[str, str]]]) -> tuple[str, str]:
+    """Extracts drafted message and recipient from conversation history for follow-ups like 'send that to him in whatsapp'."""
+    clean = prompt.strip()
+    followup_patterns = [
+        r"^(?:send|text|forward)\s+(?:that|this|it)\s+(?:message\s+)?(?:to\s+([A-Za-z0-9\s+]+?))?(?:\s+(?:in|on|via|through)\s+whatsapp)?$",
+        r"^(?:send|forward)\s+(?:it|this|that)(?:\s+(?:in|on|via|through)\s+whatsapp)?$",
+        r"^(?:yes|sure|ok|okay)?\s*(?:send\s+(?:it|that|this)|do\s+it)(?:\s+(?:to\s+([A-Za-z0-9\s+]+?))?)?(?:\s+(?:in|on|via|through)\s+whatsapp)?$"
+    ]
+    matched = False
+    explicit_recip = ""
+    for pat in followup_patterns:
+        m = re.search(pat, clean, re.IGNORECASE)
+        if m:
+            matched = True
+            if m.groups() and m.group(1):
+                explicit_recip = m.group(1).strip()
+            break
+
+    if not matched:
+        return "", ""
+
+    recip = explicit_recip
+    msg = ""
+    last_assistant_msg = ""
+    if history:
+        for turn in reversed(history):
+            if turn.get("role") == "assistant":
+                last_assistant_msg = turn.get("content", "")
+                break
+
+    # If recipient is a pronoun or missing, check previous turns
+    if not recip or recip.lower() in ("him", "her", "them", "someone", "it", "that"):
+        if history:
+            for turn in reversed(history):
+                content = str(turn.get("content", ""))
+                for known in ["Prasad Appa", "Prasad", "Appa", "Madhu", "Rachit", "Amma", "Mom", "Dad"]:
+                    if known.lower() in content.lower():
+                        recip = known
+                        break
+                if recip and recip.lower() not in ("him", "her", "them"):
+                    break
+
+    # Extract drafted message from last assistant turn
+    if last_assistant_msg:
+        quote_matches = re.findall(r'"([^"]{5,})"', last_assistant_msg)
+        if quote_matches:
+            msg = max(quote_matches, key=len)
+        else:
+            lines = [l.strip() for l in last_assistant_msg.split("\n") if l.strip()]
+            for l in lines:
+                if not l.startswith(("[", "Note:", "Reason:", "*", "Thought")):
+                    msg = l
+                    break
+
+    return recip, msg
+
+
+
+
+LLM_ACTION_SYSTEM_PROMPT = (
+    "You are an autonomous executive AI assistant action engine.\n"
+    "Your job is to understand the user's intent from their request and recent conversation history, "
+    "and output a single JSON action object.\n\n"
+    "CRITICAL RULES:\n"
+    "1. The user NEVER wants you to roleplay, draft, or simulate messages in the chat box.\n"
+    "2. If the user tells you to reach out, message, text, ask, tell, remind, ping, or inform someone to do something, "
+    "or says 'send that to him', choose action 'whatsapp'. Convert any third-person instructions into polite, direct first-person speech addressed to the recipient.\n"
+    "3. If the user asks to phone, dial, call, ring, or get contact details of someone, choose action 'call'.\n"
+    "4. If the user asks about today's agenda, briefing, schedule, or updates, choose action 'daily_briefing'.\n"
+    "5. If the user asks to search or read their past messages/chats, choose action 'message_lookup'.\n"
+    "6. If the user asks to search or read their emails, choose action 'email_lookup'.\n"
+    "7. For general questions, explanations, greetings, or analytical reasoning, choose action 'chat'.\n\n"
+    "You MUST respond ONLY with valid JSON in this schema:\n"
+    "{\n"
+    '  "action": "whatsapp" | "call" | "daily_briefing" | "message_lookup" | "email_lookup" | "chat",\n'
+    '  "recipient": "person name, relationship (e.g. appa, mom), or phone number (empty if not applicable)",\n'
+    '  "message": "the message to send directly to the recipient (e.g. \'Please come early.\') if whatsapp, else empty",\n'
+    '  "query": "search query if message_lookup or email_lookup, else empty"\n'
+    "}\n\n"
+    "Examples:\n"
+    "- 'call appa' -> {\"action\": \"call\", \"recipient\": \"appa\", \"message\": \"\", \"query\": \"\"}\n"
+    "- 'ring prasad appa' -> {\"action\": \"call\", \"recipient\": \"prasad appa\", \"message\": \"\", \"query\": \"\"}\n"
+    "- 'dial mom' -> {\"action\": \"call\", \"recipient\": \"mom\", \"message\": \"\", \"query\": \"\"}\n"
+    "- 'what is madhu\\'s number?' -> {\"action\": \"call\", \"recipient\": \"madhu\", \"message\": \"\", \"query\": \"\"}\n"
+    "- 'Ask Prasad to buy pizza and come home today' -> {\"action\": \"whatsapp\", \"recipient\": \"Prasad\", \"message\": \"Please buy pizza and come home today.\", \"query\": \"\"}\n"
+    "- 'Text appa telling him to come early' -> {\"action\": \"whatsapp\", \"recipient\": \"appa\", \"message\": \"Please come early.\", \"query\": \"\"}\n"
+    "- 'tell mom not to wait for dinner' -> {\"action\": \"whatsapp\", \"recipient\": \"mom\", \"message\": \"Please do not wait for me for dinner.\", \"query\": \"\"}\n"
+    "- 'send that to him in whatsapp' -> {\"action\": \"whatsapp\", \"recipient\": \"<resolved from history>\", \"message\": \"<extracted from previous turn>\", \"query\": \"\"}\n"
+    "- 'what was my last email?' -> {\"action\": \"email_lookup\", \"recipient\": \"\", \"message\": \"\", \"query\": \"last email\"}\n"
+    "- 'did anyone text me about dinner?' -> {\"action\": \"message_lookup\", \"recipient\": \"\", \"message\": \"\", \"query\": \"dinner\"}\n"
+    "- 'what\\'s on my plate today?' -> {\"action\": \"daily_briefing\", \"recipient\": \"\", \"message\": \"\", \"query\": \"\"}\n"
+    "- 'how do black holes form?' -> {\"action\": \"chat\", \"recipient\": \"\", \"message\": \"\", \"query\": \"\"}"
+)
 
 
 class OllamaLLMService:
@@ -127,64 +277,109 @@ class OllamaLLMService:
                 urls.append(wsl_url)
         return urls
 
-    async def classify_intent(self, user_prompt: str) -> str:
-        """Classifies user intent using the 0.6B micro-model with few-shot prompting."""
-        messages = list(CLASSIFIER_FEW_SHOT_MESSAGES)
-        messages.append({"role": "user", "content": user_prompt})
+    async def resolve_action(
+        self,
+        prompt: str,
+        history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """LLM-native action engine. Understands intent, recipient, and message in a single warm call.
+        Eliminates regex rules and brittle pattern matching.
+        """
+        # Format conversation history into prompt context
+        history_snippet = ""
+        if history:
+            turns = []
+            for h in history[-8:]:
+                r = "User" if h.get("role") == "user" else "Assistant"
+                c = str(h.get("content", "")).strip().replace("\n", " ")
+                if c:
+                    turns.append(f"{r}: {c[:300]}")
+            if turns:
+                history_snippet = "Recent Conversation History:\n" + "\n".join(turns) + "\n\n"
+
+        user_content = f"{history_snippet}User request: \"{prompt}\"\n\nJSON output:"
 
         payload = {
-            "model": self.router_model,
-            "messages": messages,
+            "model": self.fast_model,
+            "format": "json",
+            "messages": [
+                {"role": "system", "content": LLM_ACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content}
+            ],
             "stream": False,
             "options": {
                 "temperature": 0.0,
-                "num_predict": 10
+                "num_predict": 350
             }
         }
 
         candidate_urls = self._get_target_urls()
         for base_url in candidate_urls:
             endpoint = f"{base_url}/api/chat"
+            logger.info(f"[Action Engine: LLM] Querying model='{self.fast_model}' at {endpoint} (timeout=25.0s, format=json) for: '{prompt[:60]}'")
             try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.post(endpoint, json=payload)
-                if response.status_code == 200:
-                    data = response.json()
-                    raw = data.get("message", {}).get("content", "").strip().upper()
-                    if "CALL_CONTACT" in raw:
-                        intent = "CALL_CONTACT"
-                    elif "DAILY_BRIEFING" in raw:
-                        intent = "DAILY_BRIEFING"
-                    elif "MESSAGE_LOOKUP" in raw:
-                        intent = "MESSAGE_LOOKUP"
-                    elif "EMAIL_LOOKUP" in raw:
-                        intent = "EMAIL_LOOKUP"
-                    elif "DEEP_REASON" in raw:
-                        intent = "DEEP_REASON"
-                    else:
-                        intent = "FAST_CHAT"
+                async with httpx.AsyncClient(timeout=25.0) as client:
+                    resp = await client.post(endpoint, json=payload)
+                if resp.status_code == 200:
+                    msg_obj = resp.json().get("message", {})
+                    raw_content = msg_obj.get("content", "")
+                    raw_thinking = msg_obj.get("thinking", "")
 
-                    logger.info(f"[Intent Router] '{user_prompt[:40]}...' -> {intent} (raw: '{raw}') via {self.router_model}")
-                    return intent
+                    # Extract JSON object from content or thinking
+                    json_str = raw_content
+                    if not json_str or "{" not in json_str:
+                        json_str = raw_thinking
+
+                    match = re.search(r"\{.*?\}", json_str, re.DOTALL)
+                    if match:
+                        parsed = json.loads(match.group(0))
+                        if isinstance(parsed, dict) and "action" in parsed:
+                            action = str(parsed.get("action", "chat")).lower().strip()
+                            recip = str(parsed.get("recipient", "")).strip()
+                            msg = str(parsed.get("message", "")).strip()
+
+                            # If action is whatsapp and message/recip was blank for a follow-up, check history
+                            if action == "whatsapp":
+                                if not recip or recip.lower() in ("him", "her", "them", "someone", "it"):
+                                    f_recip, f_msg = extract_followup_intent(prompt, history)
+                                    if f_recip:
+                                        recip = f_recip
+                                    if not msg and f_msg:
+                                        msg = f_msg
+
+                                if msg:
+                                    msg = clean_interpreted_message(msg)
+
+                            parsed["action"] = action
+                            parsed["recipient"] = recip
+                            parsed["message"] = msg
+                            logger.info(f"[Action Engine: LLM] Resolved: action='{action}', recipient='{recip}', message='{msg}'")
+                            return parsed
             except Exception as exc:
-                logger.warning(f"Intent classification call failed to {base_url}: {exc}")
+                logger.warning(f"[Action Engine: LLM] Call to {self.fast_model} failed on {base_url}: {exc}")
                 continue
 
-        # Heuristic fallback if router network or models hiccup
-        lower = user_prompt.lower().strip()
-        if any(lower.startswith(p) for p in ["call ", "ring ", "dial ", "phone "]) or any(w in lower for w in ["phone number of", "call to ", "phone number for", "contact details of"]):
-            logger.info(f"[Intent Fallback] Detected CALL_CONTACT via heuristic keywords for: '{user_prompt[:40]}'")
-            return "CALL_CONTACT"
-        elif any(w in lower for w in ["briefing", "update for the day", "updates for the day", "today's update", "todays update", "on my plate", "on my radar", "agenda", "what do i have to do"]):
-            logger.info(f"[Intent Fallback] Detected DAILY_BRIEFING via heuristic keywords for: '{user_prompt[:40]}'")
-            return "DAILY_BRIEFING"
-        elif any(w in lower for w in ["whatsapp", "text", "message", "chat"]):
-            return "MESSAGE_LOOKUP"
-        elif any(w in lower for w in ["email", "mail", "inbox"]):
-            return "EMAIL_LOOKUP"
+        # Fallback if Ollama is unreachable
+        logger.warning(f"[Action Engine: Fallback] LLM action resolution unavailable for: '{prompt[:50]}'")
+        lower = prompt.lower().strip()
+        if any(lower.startswith(p) for p in ["call ", "ring ", "dial "]):
+            target = re.sub(r"^(?:call|ring|dial)\s+", "", prompt, flags=re.IGNORECASE).strip()
+            return {"action": "call", "recipient": target, "message": "", "query": ""}
+        return {"action": "chat", "recipient": "", "message": "", "query": ""}
 
-        logger.warning(f"All router endpoints failed for prompt '{user_prompt[:40]}'. Falling back to FAST_CHAT.")
-        return "FAST_CHAT"
+    async def classify_intent(self, user_prompt: str) -> str:
+        """Backward-compatibility wrapper delegating to resolve_action."""
+        action_data = await self.resolve_action(user_prompt)
+        action = action_data.get("action", "chat")
+        mapping = {
+            "whatsapp": "SEND_WHATSAPP",
+            "call": "CALL_CONTACT",
+            "daily_briefing": "DAILY_BRIEFING",
+            "message_lookup": "MESSAGE_LOOKUP",
+            "email_lookup": "EMAIL_LOOKUP",
+            "chat": "FAST_CHAT",
+        }
+        return mapping.get(action, "FAST_CHAT")
 
     def _prepare_routed_execution(
         self,
@@ -193,18 +388,7 @@ class OllamaLLMService:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None
     ) -> tuple[str, str, float]:
-        """Prepares the destination model, focused system prompt, and temperature based on intent."""
-
-        # 0. CALL_CONTACT: Instant 1-tap cellular dialer card
-        if intent == "CALL_CONTACT":
-            model = self.fast_model
-            temp = 0.1
-            card = contacts_service.generate_call_card_markdown(prompt)
-            sys_prompt = (
-                "You are a personal AI phone assistant. The user wants to call or contact someone.\n"
-                f"Present the following verified contact card directly without altering the phone numbers:\n\n{card}"
-            )
-            return model, sys_prompt, temp
+        """Prepares destination model, focused system prompt, and temperature based on intent."""
 
         # 1. DAILY_BRIEFING: Intelligent multi-modal cognitive triage (Schedule -> People -> Promos)
         if intent == "DAILY_BRIEFING":
@@ -316,20 +500,29 @@ class OllamaLLMService:
                 parts.append(intermediate_context)
             return model, "\n\n".join(parts), temp
 
+
+
     def _build_payload(
         self,
         prompt: str,
         target_model: str,
         system_prompt: str,
         temperature: float,
-        stream: bool = False
+        stream: bool = False,
+        history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            for turn in history:
+                role = turn.get("role")
+                content = turn.get("content")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": str(content)})
+        messages.append({"role": "user", "content": prompt})
+
         return {
             "model": target_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "stream": stream,
             "options": {
                 "temperature": temperature
@@ -340,21 +533,55 @@ class OllamaLLMService:
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        history: Optional[List[Dict[str, str]]] = None
     ) -> ChatResponse:
-        """Blocking reply method with dynamic 3-model intent routing."""
-        intent = await self.classify_intent(prompt)
-        if intent == "CALL_CONTACT":
-            card = await contacts_service.initiate_call_card(prompt)
+        """Blocking reply method with dynamic action resolution and conversation memory."""
+        action_data = await self.resolve_action(prompt, history)
+        action = action_data.get("action", "chat")
+        recipient = action_data.get("recipient", "").strip()
+        message_text = action_data.get("message", "").strip()
+        query_text = action_data.get("query", "").strip()
+
+        if action == "whatsapp":
+            if not recipient:
+                return ChatResponse(
+                    reply="Who would you like to message on WhatsApp, and what should I say?\n\n*Example:* `Tell Madhu I will be there in 10 minutes`",
+                    thinking="Detected WhatsApp action but could not identify the recipient.",
+                    model=f"Action Engine [{self.fast_model}]",
+                    total_duration_seconds=0.05
+                )
+            cleaned_msg = clean_interpreted_message(message_text) if message_text else message_text
+            card = await contacts_service.send_whatsapp_message(recipient, cleaned_msg)
             return ChatResponse(
                 reply=card,
-                thinking="Looking up verified contact and placing autonomous cellular call...",
-                model=f"Autonomous Call Engine [{intent}]",
+                thinking=f"Executing WhatsApp action: sending message to {recipient}...",
+                model=f"Action Engine [{self.fast_model}]",
+                total_duration_seconds=0.35
+            )
+
+        if action == "call":
+            target = recipient or prompt
+            card = await contacts_service.initiate_call_card(target)
+            return ChatResponse(
+                reply=card,
+                thinking=f"Executing cellular call action: placing call to {target}...",
+                model=f"Action Engine [{self.fast_model}]",
                 total_duration_seconds=0.15
             )
 
+        action_to_intent = {
+            "daily_briefing": "DAILY_BRIEFING",
+            "message_lookup": "MESSAGE_LOOKUP",
+            "email_lookup": "EMAIL_LOOKUP",
+            "deep_reason": "DEEP_REASON",
+            "chat": "FAST_CHAT",
+        }
+        intent = action_to_intent.get(action, "FAST_CHAT")
+        lookup_prompt = query_text if (action in ("message_lookup", "email_lookup") and query_text) else prompt
+
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
-            prompt, intent, system_prompt, temperature
+            lookup_prompt, intent, system_prompt, temperature
         )
 
         payload = self._build_payload(
@@ -362,7 +589,8 @@ class OllamaLLMService:
             target_model=target_model,
             system_prompt=routed_sys_prompt,
             temperature=temp,
-            stream=False
+            stream=False,
+            history=history
         )
         candidate_urls = self._get_target_urls()
         last_connect_error: Optional[Exception] = None
@@ -429,19 +657,57 @@ class OllamaLLMService:
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        history: Optional[List[Dict[str, str]]] = None
     ) -> AsyncGenerator[str, None]:
-        """Real-time SSE token stream generator with dynamic 3-model intent routing."""
-        intent = await self.classify_intent(prompt)
-        if intent == "CALL_CONTACT":
-            yield f"data: {json.dumps({'type': 'thinking', 'token': 'Looking up contact and placing autonomous cellular call on phone SIM...', 'done': False})}\n\n"
-            card = await contacts_service.initiate_call_card(prompt)
-            yield f"data: {json.dumps({'type': 'answer', 'token': card, 'done': False})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'token': '', 'done': True, 'model': f'Autonomous Call Engine [{intent}]', 'intent': intent, 'total_duration_seconds': 0.15})}\n\n"
+        """Real-time SSE token stream generator with dynamic action resolution and conversation memory."""
+        action_data = await self.resolve_action(prompt, history)
+        action = action_data.get("action", "chat")
+        recipient = action_data.get("recipient", "").strip()
+        message_text = action_data.get("message", "").strip()
+        query_text = action_data.get("query", "").strip()
+
+        if action == "whatsapp":
+            if not recipient:
+                reply_payload = json.dumps({"type": "answer", "token": "Who would you like to message on WhatsApp, and what should I say?\n\n*Example:* `Tell Madhu I will be there in 10 minutes`", "done": False})
+                done_payload = json.dumps({"type": "done", "token": "", "done": True, "model": f"Action Engine [{self.fast_model}]", "intent": "SEND_WHATSAPP", "total_duration_seconds": 0.05})
+                yield f"data: {reply_payload}\n\n"
+                yield f"data: {done_payload}\n\n"
+                return
+
+            cleaned_msg = clean_interpreted_message(message_text) if message_text else message_text
+            thinking_payload = json.dumps({"type": "thinking", "token": f'Sending WhatsApp to {recipient} with message: "{cleaned_msg}"...', "done": False})
+            yield f"data: {thinking_payload}\n\n"
+            card = await contacts_service.send_whatsapp_message(recipient, cleaned_msg)
+            card_payload = json.dumps({"type": "answer", "token": card, "done": False})
+            yield f"data: {card_payload}\n\n"
+            done_payload = json.dumps({"type": "done", "token": "", "done": True, "model": f"Action Engine [{self.fast_model}]", "intent": "SEND_WHATSAPP", "total_duration_seconds": 0.35})
+            yield f"data: {done_payload}\n\n"
             return
 
+        if action == "call":
+            target = recipient or prompt
+            thinking_payload = json.dumps({"type": "thinking", "token": f"Looking up {target} and placing autonomous cellular call on phone SIM...", "done": False})
+            yield f"data: {thinking_payload}\n\n"
+            card = await contacts_service.initiate_call_card(target)
+            card_payload = json.dumps({"type": "answer", "token": card, "done": False})
+            yield f"data: {card_payload}\n\n"
+            done_payload = json.dumps({"type": "done", "token": "", "done": True, "model": f"Action Engine [{self.fast_model}]", "intent": "CALL_CONTACT", "total_duration_seconds": 0.15})
+            yield f"data: {done_payload}\n\n"
+            return
+
+        action_to_intent = {
+            "daily_briefing": "DAILY_BRIEFING",
+            "message_lookup": "MESSAGE_LOOKUP",
+            "email_lookup": "EMAIL_LOOKUP",
+            "deep_reason": "DEEP_REASON",
+            "chat": "FAST_CHAT",
+        }
+        intent = action_to_intent.get(action, "FAST_CHAT")
+        lookup_prompt = query_text if (action in ("message_lookup", "email_lookup") and query_text) else prompt
+
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
-            prompt, intent, system_prompt, temperature
+            lookup_prompt, intent, system_prompt, temperature
         )
 
         payload = self._build_payload(
@@ -449,7 +715,8 @@ class OllamaLLMService:
             target_model=target_model,
             system_prompt=routed_sys_prompt,
             temperature=temp,
-            stream=True
+            stream=True,
+            history=history
         )
         candidate_urls = self._get_target_urls()
 

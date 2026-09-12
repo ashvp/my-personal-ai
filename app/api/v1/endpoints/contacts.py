@@ -67,3 +67,19 @@ async def get_call_card(name: str = Query(..., min_length=1, description="Contac
         "contact": contact,
         "card_markdown": card_md
     }
+
+
+@router.post("/whatsapp", summary="Send an autonomous WhatsApp message to a contact")
+async def send_whatsapp(
+    name: str = Query(..., min_length=1, description="Contact name or phone"),
+    message: str = Query(..., min_length=1, description="Message text to send")
+):
+    """Autonomously sends a WhatsApp message via MacroDroid on phone."""
+    card_md = await contacts_service.send_whatsapp_message(name, message)
+    contact = contacts_service.find_contact(name)
+    return {
+        "recipient": name,
+        "message": message,
+        "found": contact is not None,
+        "card_markdown": card_md
+    }

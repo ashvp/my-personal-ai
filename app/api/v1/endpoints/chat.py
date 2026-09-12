@@ -38,7 +38,7 @@ async def chat_endpoint(
     """Chat endpoint supporting real-time streaming and blocking JSON responses."""
     if request.stream:
         return StreamingResponse(
-            llm.stream_reply(prompt=request.message),
+            llm.stream_reply(prompt=request.message, history=request.history),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -48,4 +48,4 @@ async def chat_endpoint(
         )
 
     # Blocking JSON response for internal tasks or when stream=false
-    return await llm.generate_reply(prompt=request.message)
+    return await llm.generate_reply(prompt=request.message, history=request.history)
