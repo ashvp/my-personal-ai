@@ -28,11 +28,17 @@ class MemoryService:
        - Historical Archive (>30d)
     """
 
-    def __init__(self, db_path: str = DB_PATH):
+    def __init__(self, db_path: Optional[str] = None):
+        if not db_path:
+            db_path = os.environ.get("DUCKDB_PATH", DB_PATH)
         self.db_path = db_path
         # Normalize path for SQLAlchemy DuckDB dialect
-        norm_path = db_path.replace("\\", "/")
-        self.engine = create_engine(f"duckdb:///{norm_path}", echo=False)
+        if db_path == ":memory:":
+            uri = "duckdb:///:memory:"
+        else:
+            norm_path = db_path.replace("\\", "/")
+            uri = f"duckdb:///{norm_path}"
+        self.engine = create_engine(uri, echo=False)
         self.SessionFactory = sessionmaker(bind=self.engine, autocommit=False, autoflush=False)
         self.Session = scoped_session(self.SessionFactory)
         self._init_schema()
@@ -435,9 +441,13 @@ class MemoryService:
             # Expand family relationship aliases
             alias_map = {
                 "dad": ["appa", "papa", "dad", "father"],
-                "father": ["appa", "papa", "dad"],
+                "father": ["appa", "papa", "dad", "father"],
+                "papa": ["appa", "papa", "dad", "father"],
+                "appa": ["appa", "papa", "dad", "father"],
                 "mom": ["amma", "mom", "mother", "maa"],
                 "mother": ["amma", "mom", "mother", "maa"],
+                "amma": ["amma", "mom", "mother", "maa"],
+                "maa": ["amma", "mom", "mother", "maa"],
             }
             if lower_clean in alias_map:
                 for alias in alias_map[lower_clean]:

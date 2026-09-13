@@ -54,7 +54,12 @@ localai/
 ├── authenticate_outlook.py         # One-time Microsoft OAuth authorization helper
 ├── pair.py                         # Device pairing utility (QR code & link generator)
 ├── run.py                          # Application launcher
+├── run_tests.py                    # 105-Case benchmark & evaluation runner
+├── tests/
+│   ├── dataset_100_cases.py        # Curated 105-case benchmark evaluation dataset
+│   └── test_v1_comprehensive.py    # Automated test suite computing formal metrics
 ├── LICENSE                         # MIT License
+├── v2.md                           # Version 2.0 architecture & roadmap specification
 └── README.md
 ```
 
@@ -219,13 +224,11 @@ It will automatically save your token into `localStorage` and clear the token fr
 
 * **Web App:** [http://localhost:8000/](http://localhost:8000/)
 * **Swagger UI:** [http://localhost:8000/docs](http://localhost:8000/docs) (Use Authorize 🔓 with your token)
-* **Terminal Stream (curl -N):**
+* **Automated 105-Case Evaluation Benchmark & Test Suite:**
   ```bash
-  curl -N -X POST "http://localhost:8000/chat" \
-       -H "X-Device-Token: your_secret_device_token" \
-       -H "Content-Type: application/json" \
-       -d '{"message": "Give me 3 productivity tips"}'
+  python run_tests.py
   ```
+  Computes 7 formal evaluation metrics across 105 curated test scenarios: Meta-Prefix Strip Rate (MPSR), First-Person Perspective Fidelity (FPPF), Phone Dialer 10-Digit Sanitization Precision (PDSP), Contact Alias Resolution Rate (CARR), Follow-Up Context Extraction Accuracy (FCEA), DuckDB Memory ORM Integrity (MOI), and Temporal Knowledge Graph Benchmark Accuracy (TGBA).
 
 ---
 

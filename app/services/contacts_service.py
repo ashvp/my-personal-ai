@@ -17,21 +17,29 @@ logger = logging.getLogger(__name__)
 
 def format_phone_for_dialer(raw_phone: str) -> str:
     """Cleans phone number for Indian cellular SIM dialing (10 digits) or international dialing."""
-    digits = re.sub(r"[^\d]", "", raw_phone)
+    raw = raw_phone.strip()
+    digits = re.sub(r"[^\d]", "", raw)
+    if raw.startswith("+") and not raw.startswith("+91"):
+        return f"+{digits}"
     if len(digits) == 12 and digits.startswith("91"):
         return digits[2:]
     if len(digits) == 11 and digits.startswith("0"):
         return digits[1:]
     if len(digits) == 10:
         return digits
-    if raw_phone.strip().startswith("+"):
+    if raw.startswith("+"):
         return f"+{digits}"
     return digits
 
 
 def format_phone_for_whatsapp(raw_phone: str) -> str:
     """Formats phone number for WhatsApp with country code (e.g. 919940020084)."""
-    digits = re.sub(r"[^\d]", "", raw_phone)
+    raw = raw_phone.strip()
+    digits = re.sub(r"[^\d]", "", raw)
+    if raw.startswith("+") and not raw.startswith("+91"):
+        return digits
+    if len(digits) == 11 and digits.startswith("0"):
+        return f"91{digits[1:]}"
     if len(digits) == 10:
         return f"91{digits}"
     if len(digits) == 12 and digits.startswith("91"):

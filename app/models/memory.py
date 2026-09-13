@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Dict, Any
-from sqlalchemy import String, Text, Boolean, BigInteger, Integer, DateTime, func
+from sqlalchemy import String, Text, Boolean, BigInteger, Integer, DateTime, func, Sequence
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -94,10 +94,13 @@ class IntermediateMemory(Base):
         }
 
 
+chat_history_id_seq = Sequence("chat_history_id_seq")
+
+
 class ChatHistory(Base):
     __tablename__ = "chat_history"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, chat_history_id_seq, primary_key=True)
     session_id: Mapped[str] = mapped_column(String, index=True)
     role: Mapped[str] = mapped_column(String)
     content: Mapped[Optional[str]] = mapped_column(Text, default="")

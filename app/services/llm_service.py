@@ -34,7 +34,7 @@ def _convert_pronouns(text: str) -> str:
     text = re.sub(r"\bwith\s+(?:him|her|them)\b", "with you", text, flags=re.IGNORECASE)
     text = re.sub(r"\bto\s+(?:him|her|them)\b", "to you", text, flags=re.IGNORECASE)
     text = re.sub(r"\bfor\s+(?:him|her|them)\b", "for you", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b(?:his|her|their)\s+(car|keys|phone|charger|office|house|home|bag|laptop|wallet|turn|place|side)\b", r"your \1", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:his|her|their)\b", "your", text, flags=re.IGNORECASE)
     return text
 
 
@@ -58,13 +58,14 @@ def clean_interpreted_message(raw_msg: str) -> str:
         return ""
 
     # 1. Strip conversational meta-intents at the start (e.g. "tell amma that", "please tell mom", "ask prasad to", etc.)
+    # Note: Lookahead preserves 'not to', 'if', 'whether', 'don't' so the specialized semantic clauses below can format them properly.
     meta_prefixes = [
-        # Match "tell <Name/Relation> that/saying/to/about..." or when "that" is omitted before I/I'm/we/my
-        r"^(?:please\s+)?(?:tell|text|message|ask|inform|ping|remind)\s+(?:[A-Za-z0-9_'\s]+?)\s+(?:that\s+|saying\s+that\s+|saying\s+|to\s+|not\s+to\s+|if\s+|whether\s+|about\s+|(?=i\b|im\b|i'm\b|we\b|my\b))",
-        r"^(?:please\s+)?(?:tell|text|message|ask|inform|ping|remind)\s+(?:him|her|them|someone|me)\s+(?:to\s+|that\s+)?",
-        r"^(?:telling|saying|asking|informing)\s+(?:(?:[A-Za-z0-9_'\s]+?)\s+)?(?:to\s+|that\s+)?",
+        # Match "tell <Name/Relation> that/saying/to/about/say/please..." or lookahead before I/I'm/we/my/ill/ive/don't/not to/if/whether
+        r"^(?:please\s+)?(?:tell|text|message|ask|inform|ping|remind)\s+(?:[A-Za-z0-9_'\s]+?)\s+(?:that\s+|saying\s+that\s+|saying\s+|say\s+|telling\s+(?:him|her|them)\s+to\s+|telling\s+to\s+|(?<!not\s)to\s+|about\s+|please\s+|(?=i\b|im\b|i'm\b|ill\b|i'll\b|ive\b|i've\b|we\b|we're\b|we'll\b|my\b|our\b|don't\b|dont\b|not\s+to\b|if\b|whether\b))",
+        r"^(?:please\s+)?(?:tell|text|message|ask|inform|ping|remind)\s+(?:him|her|them|someone|me)\s+(?:(?<!not\s)to\s+|that\s+|saying\s+|say\s+)?(?=not\s+to\b)?",
+        r"^(?:telling|saying|asking|informing)\s+(?:(?:[A-Za-z0-9_'\s]+?)\s+)?(?:(?<!not\s)to\s+|that\s+|saying\s+|say\s+)?",
         r"^(?:saying\s+that|telling\s+that)\s+",
-        r"^(?:saying|telling)\s+",
+        r"^(?:saying|telling|say)\s+",
     ]
     for pattern in meta_prefixes:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
@@ -109,7 +110,11 @@ def clean_interpreted_message(raw_msg: str) -> str:
         words = rest.split()
         if words:
             first_w = words[0].lower()
-            past_to_base = {"reached": "reach", "came": "come", "got": "get", "left": "leave", "called": "call", "finished": "finish"}
+            past_to_base = {
+                "reached": "reach", "came": "come", "got": "get", "left": "leave",
+                "called": "call", "finished": "finish", "took": "take", "saw": "see",
+                "bought": "buy", "went": "go", "found": "find", "received": "receive"
+            }
             if first_w in past_to_base:
                 words[0] = past_to_base[first_w]
                 return f"Did you {' '.join(words).rstrip('?.')}?"
@@ -141,6 +146,8 @@ def clean_interpreted_message(raw_msg: str) -> str:
         if first in imperative_verbs:
             words[0] = words[0].lower()
             text = "Please " + " ".join(words)
+        elif first == "got":
+            text = "I got " + (" ".join(words[1:]) if len(words) > 1 else "")
         elif first == "i" or text.startswith("i "):
             text = "I " + text[2:]
         elif first in ("i'm", "im"):
@@ -197,14 +204,27 @@ def extract_followup_intent(prompt: str, history: Optional[List[Dict[str, str]]]
     # If recipient is a pronoun or missing, check previous turns
     if not recip or recip.lower() in ("him", "her", "them", "someone", "it", "that"):
         if history:
+            # Check user turns first so explicit names requested by the user take precedence over assistant turns
             for turn in reversed(history):
-                content = str(turn.get("content", ""))
-                for known in ["Prasad Appa", "Prasad", "Appa", "Madhu", "Rachit", "Amma", "Mom", "Dad"]:
-                    if known.lower() in content.lower():
-                        recip = known
+                if turn.get("role") == "user":
+                    content = str(turn.get("content", ""))
+                    for known in ["Prasad Appa", "Prasad", "Appa", "Madhu", "Rachit", "Amma", "Mom", "Dad"]:
+                        if re.search(rf"\b{re.escape(known)}\b", content, re.IGNORECASE):
+                            recip = known
+                            break
+                    if recip and recip.lower() not in ("him", "her", "them"):
                         break
-                if recip and recip.lower() not in ("him", "her", "them"):
-                    break
+
+            # Fallback to checking assistant turns if not identified in user turns
+            if not recip or recip.lower() in ("him", "her", "them"):
+                for turn in reversed(history):
+                    content = str(turn.get("content", ""))
+                    for known in ["Prasad Appa", "Prasad", "Appa", "Madhu", "Rachit", "Amma", "Mom", "Dad"]:
+                        if re.search(rf"\b{re.escape(known)}\b", content, re.IGNORECASE):
+                            recip = known
+                            break
+                    if recip and recip.lower() not in ("him", "her", "them"):
+                        break
 
     # Extract drafted message from last assistant turn
     if last_assistant_msg:
