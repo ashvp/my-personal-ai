@@ -346,6 +346,10 @@ class MemoryService:
 
     # --- Contacts & Cellular Dialing Memory ---
 
+    def index_contacts(self, contacts: List[Dict[str, Any]]) -> int:
+        """Alias for store_contacts_batch used by contact sync services."""
+        return self.store_contacts_batch(contacts)
+
     def store_contacts_batch(self, contacts: List[Dict[str, Any]]) -> int:
         """Batch upserts contacts into DuckDB using SQLAlchemy ORM merging."""
         if not contacts:

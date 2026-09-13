@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Background Automated Sync Engine
     BACKGROUND_SYNC_ENABLED: bool = True
-    BACKGROUND_SYNC_INTERVAL_MINUTES: int = 15
+    BACKGROUND_SYNC_INTERVAL_MINUTES: int = 1
 
     # Optional Outlook / Azure App ID (loaded from .env)
     APPLICATION_ID_OUTLOOK: str = ""

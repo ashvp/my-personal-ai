@@ -40,9 +40,10 @@ def _convert_pronouns(text: str) -> str:
 
 def clean_interpreted_message(raw_msg: str) -> str:
     """Cleans up raw message extractions, removing third-person meta-framing,
-    fixing pronouns, and converting imperative requests into polite direct speech.
+    fixing pronouns, and ensuring the message is written directly from the user's perspective.
     
     Examples:
+      'tell amma that im going to ymca today' -> "I'm going to YMCA today."
       'him to come early' -> 'Please come early.'
       'to buy milk on his way' -> 'Please buy milk on your way.'
       'him not to wait for dinner' -> 'Please do not wait for dinner.'
@@ -56,10 +57,12 @@ def clean_interpreted_message(raw_msg: str) -> str:
     if not text:
         return ""
 
-    # Strip conversational meta-intents at the start
+    # 1. Strip conversational meta-intents at the start (e.g. "tell amma that", "please tell mom", "ask prasad to", etc.)
     meta_prefixes = [
-        r"^(?:please\s+)?(?:tell|text|message|ask|inform)\s+(?:him|her|them|someone)\s+(?:to\s+)?",
-        r"^(?:telling|saying|asking|informing)\s+(?:(?:him|her|them|someone)\s+)?(?:to\s+|that\s+)?",
+        # Match "tell <Name/Relation> that/saying/to/about..." or when "that" is omitted before I/I'm/we/my
+        r"^(?:please\s+)?(?:tell|text|message|ask|inform|ping|remind)\s+(?:[A-Za-z0-9_'\s]+?)\s+(?:that\s+|saying\s+that\s+|saying\s+|to\s+|not\s+to\s+|if\s+|whether\s+|about\s+|(?=i\b|im\b|i'm\b|we\b|my\b))",
+        r"^(?:please\s+)?(?:tell|text|message|ask|inform|ping|remind)\s+(?:him|her|them|someone|me)\s+(?:to\s+|that\s+)?",
+        r"^(?:telling|saying|asking|informing)\s+(?:(?:[A-Za-z0-9_'\s]+?)\s+)?(?:to\s+|that\s+)?",
         r"^(?:saying\s+that|telling\s+that)\s+",
         r"^(?:saying|telling)\s+",
     ]
@@ -119,7 +122,7 @@ def clean_interpreted_message(raw_msg: str) -> str:
     # Convert remaining pronouns
     text = _convert_pronouns(text)
 
-    # Imperative verb detection
+    # Imperative verb detection vs First-person statements
     words = text.split()
     if words:
         first = words[0].lower()
@@ -128,10 +131,11 @@ def clean_interpreted_message(raw_msg: str) -> str:
             "please", "can", "could", "would", "will", "are", "is", "did", "do",
             "hey", "hi", "hello", "sorry", "thanks", "thank", "good", "happy", "yes", "no", "ok", "okay"
         }
+        # Notice: 'tell', 'ask', 'remind', 'inform' are intentionally excluded here so they are never prepended with 'Please'
         imperative_verbs = {
-            "come", "bring", "buy", "pick", "call", "send", "inform", "reach", "get", "check",
-            "take", "give", "wait", "meet", "remind", "let", "order", "start", "finish", "stop",
-            "leave", "drop", "make", "help", "pay", "share", "forward", "update", "tell", "ask",
+            "come", "bring", "buy", "pick", "call", "send", "reach", "get", "check",
+            "take", "give", "wait", "meet", "let", "order", "start", "finish", "stop",
+            "leave", "drop", "make", "help", "pay", "share", "forward", "update",
             "see", "show", "open", "close", "turn", "switch", "keep", "hold", "stay", "go"
         }
         if first in imperative_verbs:
@@ -141,6 +145,10 @@ def clean_interpreted_message(raw_msg: str) -> str:
             text = "I " + text[2:]
         elif first in ("i'm", "im"):
             text = "I'm " + (" ".join(words[1:]) if len(words) > 1 else "")
+        elif first in ("i'll", "ill"):
+            text = "I'll " + (" ".join(words[1:]) if len(words) > 1 else "")
+        elif first in ("i've", "ive"):
+            text = "I've " + (" ".join(words[1:]) if len(words) > 1 else "")
         elif first not in first_person_starts and not text.startswith("Please"):
             text = text[0].upper() + text[1:]
         else:
@@ -221,28 +229,33 @@ LLM_ACTION_SYSTEM_PROMPT = (
     "and output a single JSON action object.\n\n"
     "CRITICAL RULES:\n"
     "1. The user NEVER wants you to roleplay, draft, or simulate messages in the chat box.\n"
-    "2. If the user tells you to reach out, message, text, ask, tell, remind, ping, or inform someone to do something, "
-    "or says 'send that to him', choose action 'whatsapp'. Convert any third-person instructions into polite, direct first-person speech addressed to the recipient.\n"
-    "3. If the user asks to phone, dial, call, ring, or get contact details of someone, choose action 'call'.\n"
-    "4. If the user asks about today's agenda, briefing, schedule, or updates, choose action 'daily_briefing'.\n"
-    "5. If the user asks to search or read their past messages/chats, choose action 'message_lookup'.\n"
-    "6. If the user asks to search or read their emails, choose action 'email_lookup'.\n"
-    "7. For general questions, explanations, greetings, or analytical reasoning, choose action 'chat'.\n\n"
+    "2. When action is 'whatsapp', the 'message' field MUST be written completely from the USER'S direct first-person perspective, "
+    "exactly as if the user typed it themselves on their own phone.\n"
+    "3. NEVER include conversational meta-framing like 'tell amma that', 'tell him that', 'ask her to', or 'Please tell...'.\n"
+    "   - For personal updates ('tell amma that im going to ymca today'), the message is simply: \"I'm going to YMCA today.\"\n"
+    "   - For status/arrival updates ('tell dad ill be 10 mins late'), the message is: \"I will be 10 minutes late.\"\n"
+    "   - For requests to the recipient ('ask prasad to buy pizza'), the message is a polite direct request: \"Please buy pizza.\"\n"
+    "   - For negative commands ('tell mom not to wait for dinner'), the message is: \"Please do not wait for me for dinner.\"\n"
+    "4. If the user asks to phone, dial, call, ring, or get contact details of someone, choose action 'call'.\n"
+    "5. If the user asks about today's agenda, briefing, schedule, or updates, choose action 'daily_briefing'.\n"
+    "6. If the user asks to search or read their past messages/chats, choose action 'message_lookup'.\n"
+    "7. If the user asks to search or read their emails, choose action 'email_lookup'.\n"
+    "8. For general questions, explanations, greetings, or analytical reasoning, choose action 'chat'.\n\n"
     "You MUST respond ONLY with valid JSON in this schema:\n"
     "{\n"
     '  "action": "whatsapp" | "call" | "daily_briefing" | "message_lookup" | "email_lookup" | "chat",\n'
-    '  "recipient": "person name, relationship (e.g. appa, mom), or phone number (empty if not applicable)",\n'
-    '  "message": "the message to send directly to the recipient (e.g. \'Please come early.\') if whatsapp, else empty",\n'
+    '  "recipient": "person name, relationship (e.g. appa, mom, amma), or phone number (empty if not applicable)",\n'
+    '  "message": "first-person message to send to recipient (e.g. \'I\'m going to YMCA today.\') if whatsapp, else empty",\n'
     '  "query": "search query if message_lookup or email_lookup, else empty"\n'
     "}\n\n"
     "Examples:\n"
-    "- 'call appa' -> {\"action\": \"call\", \"recipient\": \"appa\", \"message\": \"\", \"query\": \"\"}\n"
-    "- 'ring prasad appa' -> {\"action\": \"call\", \"recipient\": \"prasad appa\", \"message\": \"\", \"query\": \"\"}\n"
-    "- 'dial mom' -> {\"action\": \"call\", \"recipient\": \"mom\", \"message\": \"\", \"query\": \"\"}\n"
-    "- 'what is madhu\\'s number?' -> {\"action\": \"call\", \"recipient\": \"madhu\", \"message\": \"\", \"query\": \"\"}\n"
+    "- 'tell amma that im going to ymca today' -> {\"action\": \"whatsapp\", \"recipient\": \"amma\", \"message\": \"I'm going to YMCA today.\", \"query\": \"\"}\n"
+    "- 'tell dad that ill be late' -> {\"action\": \"whatsapp\", \"recipient\": \"dad\", \"message\": \"I'll be late.\", \"query\": \"\"}\n"
+    "- 'tell prasad that the server is updated' -> {\"action\": \"whatsapp\", \"recipient\": \"prasad\", \"message\": \"The server is updated.\", \"query\": \"\"}\n"
     "- 'Ask Prasad to buy pizza and come home today' -> {\"action\": \"whatsapp\", \"recipient\": \"Prasad\", \"message\": \"Please buy pizza and come home today.\", \"query\": \"\"}\n"
     "- 'Text appa telling him to come early' -> {\"action\": \"whatsapp\", \"recipient\": \"appa\", \"message\": \"Please come early.\", \"query\": \"\"}\n"
     "- 'tell mom not to wait for dinner' -> {\"action\": \"whatsapp\", \"recipient\": \"mom\", \"message\": \"Please do not wait for me for dinner.\", \"query\": \"\"}\n"
+    "- 'call appa' -> {\"action\": \"call\", \"recipient\": \"appa\", \"message\": \"\", \"query\": \"\"}\n"
     "- 'send that to him in whatsapp' -> {\"action\": \"whatsapp\", \"recipient\": \"<resolved from history>\", \"message\": \"<extracted from previous turn>\", \"query\": \"\"}\n"
     "- 'what was my last email?' -> {\"action\": \"email_lookup\", \"recipient\": \"\", \"message\": \"\", \"query\": \"last email\"}\n"
     "- 'did anyone text me about dinner?' -> {\"action\": \"message_lookup\", \"recipient\": \"\", \"message\": \"\", \"query\": \"dinner\"}\n"

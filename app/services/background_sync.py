@@ -66,7 +66,8 @@ class BackgroundSyncService:
                     f"✅ Background sync cycle completed. "
                     f"Gmail: {results.get('gmail', {}).get('synced_count', 0)}, "
                     f"WhatsApp: {results.get('whatsapp', {}).get('synced_count', 0)}, "
-                    f"SMS: {results.get('sms', {}).get('synced_count', 0)}"
+                    f"SMS: {results.get('sms', {}).get('synced_count', 0)}, "
+                    f"Contacts: {results.get('contacts', {}).get('synced_count', 0)}"
                 )
             except Exception as exc:
                 logger.exception(f"Unexpected error during background sync: {exc}")

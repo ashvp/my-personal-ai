@@ -78,6 +78,10 @@ class ContactsService:
 
         return sqlite3.connect(self.db_path)
 
+    def sync_contacts(self) -> Dict[str, Any]:
+        """Alias for sync_contacts_from_beeper used by background sync service."""
+        return self.sync_contacts_from_beeper()
+
     def sync_contacts_from_beeper(self) -> Dict[str, Any]:
         """Reads distinct verified human contacts from Beeper SQLite and synchronizes to DuckDB."""
         if not self.is_available():
@@ -150,6 +154,8 @@ class ContactsService:
             return {
                 "success": True,
                 "count": len(contacts_to_index),
+                "synced_count": len(contacts_to_index),
+                "named_contacts": len(contacts_to_index),
                 "message": f"Successfully indexed {len(contacts_to_index)} contacts."
             }
 
