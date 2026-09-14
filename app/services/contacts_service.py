@@ -4,6 +4,7 @@ import re
 import sqlite3
 import logging
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 
 import httpx
 from app.config import settings
@@ -57,6 +58,7 @@ class ContactsService:
 
     def __init__(self, db_path: str = DEFAULT_BEEPER_DB_PATH):
         self.db_path = db_path
+        self._known_contacts_cache: Optional[Dict[str, str]] = None
 
     def is_available(self) -> bool:
         return bool(self.db_path and os.path.exists(self.db_path))
@@ -103,6 +105,15 @@ class ContactsService:
             conn = self._get_sqlite_connection()
             cursor = conn.cursor()
 
+            # Load known contacts to allow delta-only syncing
+            if self._known_contacts_cache is None:
+                try:
+                    self._known_contacts_cache = memory_service.get_known_contacts_map()
+                except Exception as e:
+                    logger.warning(f"Could not load known contacts map: {e}")
+                    self._known_contacts_cache = {}
+            known_contacts = self._known_contacts_cache
+
             # Inspect available tables in Beeper SQLite store
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
             existing_tables = {row[0].lower() for row in cursor.fetchall()}
@@ -139,10 +150,12 @@ class ContactsService:
 
                     raw_phone = ""
                     if user_id:
+                        # Skip WhatsApp privacy LIDs (e.g. lid-104149114982455) which are internal routing hashes, not phone numbers
+                        if "lid-" in user_id or "@lid" in user_id:
+                            continue
                         clean_user = user_id.split(":")[0]
                         for pfx in ["@whatsapp_", "@gmessages_", "@sms_", "@signal_", "@telegram_", "@"]:
                             clean_user = clean_user.replace(pfx, "")
-                        clean_user = clean_user.replace("lid-", "")
                         m_phone = re.search(r"(\+?\d{10,15})", clean_user)
                         if m_phone:
                             raw_phone = m_phone.group(1)
@@ -160,6 +173,10 @@ class ContactsService:
                         clean_phone = format_phone_for_dialer(raw_phone)
                         if clean_phone and clean_phone not in seen_phones:
                             seen_phones.add(clean_phone)
+                            # Delta check: skip if contact already exists in DuckDB with identical name
+                            if clean_phone in known_contacts and known_contacts[clean_phone] == name:
+                                continue
+
                             contacts_to_index.append({
                                 "id": f"cnt_{clean_phone}",
                                 "name": name,
@@ -167,6 +184,7 @@ class ContactsService:
                                 "normalized_name": name.lower(),
                                 "source": "beeper_contacts"
                             })
+                            known_contacts[clean_phone] = name
 
             # 2. Legacy / alternative Beeper schema with 'contacts' table
             elif "contacts" in existing_tables:
@@ -209,6 +227,10 @@ class ContactsService:
                         continue
                     seen_phones.add(clean_phone)
 
+                    # Delta check: skip if contact already exists in DuckDB with identical name
+                    if clean_phone in known_contacts and known_contacts[clean_phone] == name:
+                        continue
+
                     contacts_to_index.append({
                         "id": contact_id or f"cnt_{clean_phone}",
                         "name": name,
@@ -216,38 +238,22 @@ class ContactsService:
                         "normalized_name": name.lower(),
                         "source": "beeper_contacts"
                     })
+                    known_contacts[clean_phone] = name
 
             conn.close()
 
             if contacts_to_index:
                 memory_service.index_contacts(contacts_to_index)
-                logger.info(f"Synchronized and indexed {len(contacts_to_index)} contacts from Beeper into DuckDB.")
+                logger.info(f"Synchronized and indexed {len(contacts_to_index)} new/updated contacts from Beeper into DuckDB.")
 
                 # Assert into Temporal Knowledge Graph (V2)
                 if getattr(settings, "ENABLE_V2_GRAPH", True):
-                    today_str = datetime.now().strftime("%Y-%m-%d")
-                    for c in contacts_to_index:
-                        c_name = c.get("name")
-                        c_phone = c.get("phone_number")
-                        if c_name and not c_name.startswith("+"):
-                            try:
-                                graph_service.assert_fact(
-                                    subject="Ashwin",
-                                    predicate="KNOWS",
-                                    object=c_name,
-                                    valid_from=today_str,
-                                    is_terminal_mutation=False
-                                )
-                                if c_phone:
-                                    graph_service.assert_fact(
-                                        subject=c_name,
-                                        predicate="PRIMARY_PHONE",
-                                        object=c_phone,
-                                        valid_from=today_str,
-                                        is_terminal_mutation=True
-                                    )
-                            except Exception as c_g_exc:
-                                logger.debug(f"Error asserting contact {c_name} to graph: {c_g_exc}")
+                    try:
+                        graph_service.batch_assert_contacts(contacts_to_index)
+                    except Exception as c_g_exc:
+                        logger.warning(f"Error in batch contact graph assertion: {c_g_exc}")
+            else:
+                logger.debug("Contacts are already up-to-date (0 changes).")
 
             return {
                 "success": True,

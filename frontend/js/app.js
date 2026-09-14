@@ -183,6 +183,18 @@ function createAssistantMessageNode() {
       Q
     </div>
     <div class="flex-1 overflow-hidden">
+      <!-- Explainability / Knowledge Graph Section -->
+      <div class="explainability-container hidden mb-3">
+        <details class="explainability-box p-3 text-xs md:text-sm rounded-xl bg-slate-900/90 border border-emerald-500/30 shadow-inner" open>
+          <summary class="flex items-center gap-2 font-medium text-emerald-400 cursor-pointer select-none">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span class="explainability-badge text-emerald-300 font-semibold">⚡ Version 2.0 (Knowledge Graph)</span>
+            <span class="explainability-summary text-slate-400 text-[11px] ml-auto">Graph & Context Evidence</span>
+          </summary>
+          <div class="explainability-content mt-2.5 pt-2.5 border-t border-slate-800/80 text-slate-300 font-sans space-y-2"></div>
+        </details>
+      </div>
+
       <!-- Thinking Section (Collapsed by default once answered) -->
       <div class="thinking-container hidden mb-3">
         <details class="thinking-box thinking-active p-3 text-xs md:text-sm" open>
@@ -219,6 +231,10 @@ function createAssistantMessageNode() {
 
   return {
     wrapper,
+    explainabilityContainer: wrapper.querySelector('.explainability-container'),
+    explainabilityBox: wrapper.querySelector('.explainability-box'),
+    explainabilityBadge: wrapper.querySelector('.explainability-badge'),
+    explainabilityContent: wrapper.querySelector('.explainability-content'),
     thinkingContainer: wrapper.querySelector('.thinking-container'),
     thinkingDetails: wrapper.querySelector('.thinking-box'),
     thinkingSpinner: wrapper.querySelector('.thinking-spinner'),
@@ -322,6 +338,79 @@ messageForm.addEventListener('submit', async (e) => {
 
         try {
           const payload = JSON.parse(jsonStr);
+
+          // 0. Explainability & Knowledge Graph Evidence
+          if (payload.type === 'explainability' && payload.data) {
+            const exp = payload.data;
+            node.explainabilityContainer.classList.remove('hidden');
+
+            const isV2 = exp.version === 'v2';
+            node.explainabilityBadge.textContent = isV2 ? '⚡ Version 2.0 (Knowledge Graph Active)' : '🔍 Version 1.0 (Pure Vector RAG)';
+            node.explainabilityBadge.className = isV2 ? 'text-emerald-300 font-semibold' : 'text-blue-300 font-semibold';
+
+            let html = `
+              <div class="flex flex-wrap gap-2 items-center mb-2 pb-2 border-b border-slate-800 text-[11px]">
+                <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300">Model: <strong>${escapeHtml(exp.model || '')}</strong></span>
+                <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300">Intent: <strong>${escapeHtml(exp.intent || '')}</strong></span>
+                <span class="px-2 py-0.5 rounded ${isV2 ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/40' : 'bg-blue-950/80 text-blue-300 border border-blue-800/40'}">
+                  ${isV2 ? 'Bitemporal Knowledge Graph Engine' : 'Vector RAG Mode'}
+                </span>
+              </div>
+            `;
+
+            if (exp.matched_entities && exp.matched_entities.length > 0) {
+              html += `
+                <div class="mb-2">
+                  <div class="text-slate-400 font-medium mb-1">👤 Identified Entities:</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    ${exp.matched_entities.map(e => `<span class="px-2 py-0.5 rounded bg-indigo-950/70 border border-indigo-800/50 text-indigo-300 font-mono text-[11px]">${escapeHtml(e)}</span>`).join('')}
+                  </div>
+                </div>
+              `;
+            }
+
+            if (exp.relational_path && exp.relational_path.length > 0) {
+              html += `
+                <div class="mb-2 p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-800/40">
+                  <div class="text-emerald-400 font-semibold mb-1 flex items-center gap-1.5">
+                    <span>🔗 Verified Relational Graph Traversal (Ground Truth):</span>
+                  </div>
+                  <div class="font-mono text-emerald-200 text-xs space-y-1">
+                    ${exp.relational_path.map(p => `<div>• ${escapeHtml(p)}</div>`).join('')}
+                  </div>
+                </div>
+              `;
+            }
+
+            if (exp.graph_facts && exp.graph_facts.length > 0) {
+              html += `
+                <div class="mb-2 p-2.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
+                  <div class="text-slate-300 font-semibold mb-1">📋 Active Knowledge Graph Facts:</div>
+                  <div class="space-y-1 font-mono text-xs text-slate-200">
+                    ${exp.graph_facts.map(f => `<div>• <strong>${escapeHtml(f.subject)}</strong> —[${escapeHtml(f.predicate)}]➔ <strong>${escapeHtml(f.object)}</strong> <span class="text-slate-400 text-[10px]">(since ${escapeHtml(f.valid_from || 'active')})</span></div>`).join('')}
+                  </div>
+                </div>
+              `;
+            } else if (isV2 && (!exp.matched_entities || exp.matched_entities.length === 0)) {
+              html += `
+                <div class="text-slate-400 italic text-xs mb-1">
+                  ℹ️ General query — no specific entity matched in Knowledge Graph.
+                </div>
+              `;
+            }
+
+            if (exp.system_prompt_preview) {
+              html += `
+                <details class="mt-2 text-[11px]">
+                  <summary class="text-slate-400 hover:text-slate-200 cursor-pointer select-none">View Exact Context Injected into Model</summary>
+                  <pre class="mt-1.5 p-2 rounded bg-slate-950/80 border border-slate-800 text-slate-400 font-mono text-[10px] whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">${escapeHtml(exp.system_prompt_preview)}</pre>
+                </details>
+              `;
+            }
+
+            node.explainabilityContent.innerHTML = html;
+            scrollToBottom();
+          }
 
           // 1. Thinking Token
           if (payload.type === 'thinking' && payload.token) {

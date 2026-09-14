@@ -43,6 +43,71 @@ async def assert_fact_endpoint(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+class ExtractTextRequest(BaseModel):
+    text: str = Field(..., description="Natural language statement to extract facts from")
+    date_str: str = Field(..., description="Observation date (YYYY-MM-DD)")
+    source_id: Optional[str] = Field("", description="Source tag, e.g. 'TKG_01'")
+
+
+@router.post(
+    "/extract",
+    summary="Extract and assert facts from natural language text (v2)",
+    dependencies=[Depends(verify_device_token)]
+)
+async def extract_facts_endpoint(
+    req: ExtractTextRequest,
+    graph: GraphService = Depends(get_graph_service)
+):
+    try:
+        asserted = graph.extract_and_assert_from_text(req.text, req.date_str, source_id=req.source_id)
+        return {"success": True, "count": len(asserted), "asserted": asserted}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete(
+    "/clean",
+    summary="Purge benchmark test facts (v2)",
+    dependencies=[Depends(verify_device_token)]
+)
+async def clean_test_facts_endpoint(
+    prefix: str = Query("TKG_", description="Source ID prefix to purge"),
+    graph: GraphService = Depends(get_graph_service)
+):
+    try:
+        from app.models.memory import TemporalEdge, Entity, Contact
+        from sqlalchemy import delete, select
+        session = graph.get_session()
+        del_edges = session.execute(
+            delete(TemporalEdge).where(TemporalEdge.source_id.like(f"{prefix}%"))
+        )
+        session.commit()
+
+        # Clean orphaned entities created by tests that have no remaining edges
+        subs = set(session.scalars(select(TemporalEdge.subject)).all())
+        objs = set(session.scalars(select(TemporalEdge.object)).all())
+        used_names = {n.lower() for n in (subs | objs) if n}
+        contact_names = {c.lower() for c in session.scalars(select(Contact.name)).all() if c}
+
+        del_ents_count = 0
+        for ent in session.scalars(select(Entity)).all():
+            if ent.name.lower() not in used_names and ent.name.lower() not in contact_names and ent.name.lower() != "ashwin":
+                session.delete(ent)
+                del_ents_count += 1
+        session.commit()
+
+        return {
+            "success": True,
+            "deleted_edges": del_edges.rowcount,
+            "deleted_entities": del_ents_count,
+            "deleted": del_edges.rowcount
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        session.close()
+
+
 @router.get(
     "/facts",
     summary="Query active or point-in-time facts (v2)",

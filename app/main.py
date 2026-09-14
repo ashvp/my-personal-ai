@@ -38,6 +38,14 @@ async def lifespan(app: FastAPI):
     if settings.BACKGROUND_SYNC_ENABLED:
         await background_sync_service.start()
 
+    if getattr(settings, "ENABLE_V2_GRAPH", True):
+        try:
+            from app.services.graph_service import graph_service
+            import asyncio
+            await asyncio.to_thread(graph_service.sync_all_stored_contacts)
+        except Exception as g_sync_exc:
+            logger.warning(f"Error during startup graph contact sync: {g_sync_exc}")
+
     yield
 
     if settings.BACKGROUND_SYNC_ENABLED:
@@ -102,7 +110,8 @@ app.include_router(chat_router_v2, prefix="/api/v2", tags=["Chat (v2)"])
 app.include_router(graph_router_v2, prefix="/api/v2", tags=["Knowledge Graph (v2)"])
 
 # Root /chat routes according to configured DEFAULT_API_VERSION (v1 or v2)
-if getattr(settings, "DEFAULT_API_VERSION", "v1") == "v2":
+active_version = str(getattr(settings, "DEFAULT_API_VERSION", "v2")).strip().lower()
+if active_version == "v2":
     app.include_router(chat_router_v2, tags=["Chat (Active v2)"])
 else:
     app.include_router(chat_router_v1, tags=["Chat (Active v1)"])

@@ -216,6 +216,103 @@ class GraphService:
         finally:
             session.close()
 
+    def batch_assert_contacts(self, contacts: List[Dict[str, Any]], user_name: str = "Ashwin") -> int:
+        """Efficiently batch-asserts contacts into the knowledge graph in a single transaction."""
+        if not contacts:
+            return 0
+
+        valid_contacts = [
+            c for c in contacts
+            if c.get("name") and not c["name"].startswith("+") and len(c["name"]) > 1
+        ]
+        if not valid_contacts:
+            return 0
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        session = self.get_session()
+        added_count = 0
+        try:
+            # Query existing active contacts for user to prevent duplicates
+            existing_active = set(
+                session.scalars(
+                    select(func.lower(TemporalEdge.object)).where(
+                        func.lower(TemporalEdge.subject) == user_name.lower(),
+                        TemporalEdge.predicate == "KNOWS",
+                        TemporalEdge.valid_to.is_(None)
+                    )
+                ).all()
+            )
+
+            # Query existing entities to prevent entity duplication
+            existing_entities = set(session.scalars(select(func.lower(Entity.name))).all())
+
+            # Ensure user entity exists
+            user_ent = session.scalars(select(Entity).where(func.lower(Entity.name) == user_name.lower())).first()
+            if not user_ent:
+                user_ent = Entity(
+                    id=f"ent_{uuid.uuid4().hex[:12]}",
+                    name=user_name,
+                    entity_type="Person"
+                )
+                session.add(user_ent)
+                existing_entities.add(user_name.lower())
+
+            for c in valid_contacts:
+                c_name = c["name"].strip()
+                c_phone = c.get("phone_number", "").strip()
+
+                if c_name.lower() in existing_active:
+                    continue
+
+                # Add entity if not already present
+                if c_name.lower() not in existing_entities:
+                    ent = Entity(
+                        id=f"ent_{uuid.uuid4().hex[:12]}",
+                        name=c_name,
+                        entity_type="Person"
+                    )
+                    session.add(ent)
+                    existing_entities.add(c_name.lower())
+
+                # Add KNOWS edge
+                edge = TemporalEdge(
+                    id=f"edge_{uuid.uuid4().hex[:12]}",
+                    subject=user_name,
+                    predicate="KNOWS",
+                    object=c_name,
+                    source_id="beeper_contacts",
+                    confidence=1.0,
+                    valid_from=today_str,
+                    valid_to=None
+                )
+                session.add(edge)
+                existing_active.add(c_name.lower())
+                added_count += 1
+
+                # If phone number available, add PRIMARY_PHONE edge
+                if c_phone:
+                    p_edge = TemporalEdge(
+                        id=f"edge_{uuid.uuid4().hex[:12]}",
+                        subject=c_name,
+                        predicate="PRIMARY_PHONE",
+                        object=c_phone,
+                        source_id="beeper_contacts",
+                        confidence=1.0,
+                        valid_from=today_str,
+                        valid_to=None
+                    )
+                    session.add(p_edge)
+
+            session.commit()
+            logger.info(f"[Graph] Batch asserted {added_count} contacts into Knowledge Graph.")
+            return added_count
+        except Exception as exc:
+            session.rollback()
+            logger.error(f"[Graph] Error in batch_assert_contacts: {exc}")
+            return 0
+        finally:
+            session.close()
+
     def retract_fact(
         self,
         subject: str,
@@ -608,33 +705,52 @@ class GraphService:
 
         facts_lines = []
 
-        # Check for multi-hop path query (e.g. "How do I know X?", "connection between X and Y")
-        if any(w in lower_q for w in ["how do i know", "connected to", "connection", "introduce", "who is"]):
+        # Check for multi-hop path query (e.g. "How do I know X?", "What is my relationship with X?")
+        rel_triggers = [
+            "how do i know", "connected to", "connection", "introduce", "who is",
+            "relationship", "relation", "related", "how do we know", "do i know",
+            "friend", "colleague", "contact"
+        ]
+        if any(w in lower_q for w in rel_triggers):
             for ent in matched_entities:
                 if ent.lower() != "ashwin":
                     path = self.traverse_network("Ashwin", ent, max_depth=4, target_date=target_date)
                     if path:
-                        steps = [f"Ashwin"]
+                        steps = ["Ashwin"]
                         for step in path:
                             steps.append(f"--[{step['predicate']}]--> {step['object']}")
-                        facts_lines.append(f"• Relational Chain: {' '.join(steps)}")
+                        facts_lines.append(f"• Verified Relational Path: {' '.join(steps)}")
 
-        # Fetch facts for matched entities
+        # Fetch facts for matched entities (both outgoing and incoming edges)
         for ent in matched_entities:
             if target_date:
                 # Point-in-time slice
                 edges = self.query_point_in_time(target_date, subject=ent)
-                if not edges:
-                    edges = self.query_point_in_time(target_date, object=ent)
-                for e in edges:
+                incoming = self.query_point_in_time(target_date, object=ent)
+                seen_ids = set()
+                combined = []
+                for e in (edges + incoming):
+                    if e["id"] not in seen_ids:
+                        seen_ids.add(e["id"])
+                        combined.append(e)
+
+                for e in combined:
                     facts_lines.append(
                         f"• [{e['predicate']}] (At {target_date}) {e['subject']} -> {e['object']} "
                         f"(valid: {e['valid_from']} to {e['valid_to'] or 'Present'})"
                     )
             else:
-                # Active facts
+                # Active facts: query both outgoing edges and incoming edges (e.g. Ashwin KNOWS Madhu)
                 edges = self.query_active_facts(subject=ent)
-                for e in edges:
+                incoming = self.query_active_facts(object=ent)
+                seen_ids = set()
+                combined = []
+                for e in (edges + incoming):
+                    if e["id"] not in seen_ids:
+                        seen_ids.add(e["id"])
+                        combined.append(e)
+
+                for e in combined:
                     facts_lines.append(
                         f"• [CURRENT ACTIVE] {e['subject']} {e['predicate']} {e['object']} "
                         f"(Active since: {e['valid_from']})"
@@ -648,9 +764,82 @@ class GraphService:
             "The following facts are verified and chronologically resolved from the user's personal graph:",
         ]
         output.extend(facts_lines)
-        output.append("Instructions: Prioritize these facts above general knowledge or ambiguous message snippets.")
+        output.append("Instructions:")
+        output.append("1. Prioritize these verified facts above general knowledge or ambiguous message snippets.")
+        output.append("2. When asked about personal relationships or how the user knows someone, rely strictly on the verified relational paths and edges above. Do not guess or extrapolate familial relationships from casual chat messages.")
         output.append("---------------------------------------------------------")
         return "\n".join(output)
+
+    def sync_all_stored_contacts(self, user_name: str = "Ashwin") -> int:
+        """Startup sync ensuring all verified named contacts from DuckDB contacts table are asserted into the Knowledge Graph."""
+        from app.models.memory import Contact
+        session = self.get_session()
+        try:
+            stmt = select(Contact.name, Contact.phone_number)
+            rows = session.execute(stmt).all()
+            contacts = [
+                {"name": r[0].strip(), "phone_number": (r[1] or "").strip()}
+                for r in rows
+                if r[0] and len(r[0].strip()) > 1 and not r[0].strip().startswith("+") and not r[0].strip().isdigit()
+            ]
+            if contacts:
+                count = self.batch_assert_contacts(contacts, user_name=user_name)
+                logger.info(f"[Graph] Initialized knowledge graph with {count} verified contacts from DuckDB.")
+                return count
+            return 0
+        except Exception as exc:
+            logger.warning(f"Error syncing stored contacts to graph: {exc}")
+            return 0
+        finally:
+            session.close()
+
+    def get_explainability_context(self, query: str) -> Dict[str, Any]:
+        """Returns structured explainability metadata for what the Knowledge Graph sees for a given query."""
+        clean_q = query.strip()
+        lower_q = clean_q.lower()
+
+        session = self.get_session()
+        try:
+            all_entities = session.scalars(select(Entity.name)).all()
+        finally:
+            session.close()
+
+        matched_entities = [
+            ent for ent in all_entities
+            if ent.lower() in lower_q and len(ent) > 2
+        ]
+
+        rel_paths = []
+        for ent in matched_entities:
+            if ent.lower() != "ashwin":
+                path = self.traverse_network("Ashwin", ent, max_depth=4)
+                if path:
+                    steps = ["Ashwin"]
+                    for step in path:
+                        steps.append(f"--[{step['predicate']}]--> {step['object']}")
+                    rel_paths.append(" ".join(steps))
+
+        facts = []
+        for ent in matched_entities:
+            outgoing = self.query_active_facts(subject=ent)
+            incoming = self.query_active_facts(object=ent)
+            seen_ids = set()
+            for e in outgoing + incoming:
+                if e["id"] not in seen_ids:
+                    seen_ids.add(e["id"])
+                    facts.append({
+                        "subject": e["subject"],
+                        "predicate": e["predicate"],
+                        "object": e["object"],
+                        "valid_from": e["valid_from"]
+                    })
+
+        return {
+            "matched_entities": matched_entities,
+            "relational_paths": rel_paths,
+            "facts": facts,
+            "has_graph_data": bool(matched_entities or rel_paths or facts)
+        }
 
 
 graph_service = GraphService()

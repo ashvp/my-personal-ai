@@ -538,7 +538,13 @@ class OllamaLLMService:
             if use_graph and graph_context:
                 parts.append(graph_context)
             if intermediate_context:
-                parts.append(intermediate_context)
+                if use_graph and graph_context:
+                    query_words = set(re.findall(r"\w+", prompt.lower())) - {"what", "is", "my", "the", "a", "an", "with", "to", "who", "how", "do", "i", "of"}
+                    filtered_lines = [line for line in intermediate_context.split("\n") if any(w in line.lower() for w in query_words)]
+                    if filtered_lines:
+                        parts.append("--- RECENT COMMUNICATIONS ---\n" + "\n".join(filtered_lines) + "\n-----------------------------")
+                else:
+                    parts.append(intermediate_context)
             return model, "\n\n".join(parts), temp
 
         # 5. FAST_CHAT: Quick general chat, drafting, summarization using Fast Model
@@ -550,7 +556,13 @@ class OllamaLLMService:
             if use_graph and graph_context:
                 parts.append(graph_context)
             if intermediate_context:
-                parts.append(intermediate_context)
+                if use_graph and graph_context:
+                    query_words = set(re.findall(r"\w+", prompt.lower())) - {"what", "is", "my", "the", "a", "an", "with", "to", "who", "how", "do", "i", "of"}
+                    filtered_lines = [line for line in intermediate_context.split("\n") if any(w in line.lower() for w in query_words)]
+                    if filtered_lines:
+                        parts.append("--- RECENT COMMUNICATIONS ---\n" + "\n".join(filtered_lines) + "\n-----------------------------")
+                else:
+                    parts.append(intermediate_context)
             return model, "\n\n".join(parts), temp
 
 
@@ -634,10 +646,23 @@ class OllamaLLMService:
         intent = action_to_intent.get(action, "FAST_CHAT")
         lookup_prompt = query_text if (action in ("message_lookup", "email_lookup") and query_text) else prompt
 
-        active_version = version or getattr(settings, "DEFAULT_API_VERSION", "v1")
+        active_version = str(version or getattr(settings, "DEFAULT_API_VERSION", "v2")).strip().lower()
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
             lookup_prompt, intent, system_prompt, temperature, version=active_version
         )
+
+        use_graph = (active_version == "v2") and getattr(settings, "ENABLE_V2_GRAPH", True)
+        exp_meta = graph_service.get_explainability_context(lookup_prompt) if use_graph else {}
+        explain_info = {
+            "version": active_version,
+            "engine": "Version 2.0 (Bitemporal Knowledge Graph)" if active_version == "v2" else "Version 1.0 (Vector RAG)",
+            "intent": intent,
+            "model": target_model,
+            "matched_entities": exp_meta.get("matched_entities", []),
+            "relational_path": exp_meta.get("relational_paths", []),
+            "graph_facts": exp_meta.get("facts", []),
+            "system_prompt_preview": routed_sys_prompt[:1200]
+        }
 
         payload = self._build_payload(
             prompt=prompt,
@@ -681,7 +706,8 @@ class OllamaLLMService:
                     reply=content,
                     thinking=thinking if thinking != content else None,
                     model=f"{data.get('model', target_model)} [{intent}]",
-                    total_duration_seconds=total_duration_sec
+                    total_duration_seconds=total_duration_sec,
+                    explainability=explain_info
                 )
 
             except httpx.ConnectError as exc:
@@ -762,10 +788,23 @@ class OllamaLLMService:
         intent = action_to_intent.get(action, "FAST_CHAT")
         lookup_prompt = query_text if (action in ("message_lookup", "email_lookup") and query_text) else prompt
 
-        active_version = version or getattr(settings, "DEFAULT_API_VERSION", "v1")
+        active_version = str(version or getattr(settings, "DEFAULT_API_VERSION", "v2")).strip().lower()
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
             lookup_prompt, intent, system_prompt, temperature, version=active_version
         )
+
+        use_graph = (active_version == "v2") and getattr(settings, "ENABLE_V2_GRAPH", True)
+        exp_meta = graph_service.get_explainability_context(lookup_prompt) if use_graph else {}
+        explain_info = {
+            "version": active_version,
+            "engine": "Version 2.0 (Bitemporal Knowledge Graph)" if active_version == "v2" else "Version 1.0 (Vector RAG)",
+            "intent": intent,
+            "model": target_model,
+            "matched_entities": exp_meta.get("matched_entities", []),
+            "relational_path": exp_meta.get("relational_paths", []),
+            "graph_facts": exp_meta.get("facts", []),
+            "system_prompt_preview": routed_sys_prompt[:1200]
+        }
 
         payload = self._build_payload(
             prompt=prompt,
@@ -806,6 +845,9 @@ class OllamaLLMService:
             yield f"data: {err_payload}\n\n"
             return
 
+        # Emit explainability metadata as the very first SSE event so user sees evidence instantly
+        yield f"data: {json.dumps({'type': 'explainability', 'data': explain_info, 'done': False})}\n\n"
+
         try:
             async for line in response.aiter_lines():
                 if not line or not line.strip():
@@ -836,7 +878,9 @@ class OllamaLLMService:
                         "done": True,
                         "model": f"{chunk.get('model', target_model)} [{intent}]",
                         "intent": intent,
-                        "total_duration_seconds": total_sec
+                        "version": active_version,
+                        "total_duration_seconds": total_sec,
+                        "explainability": explain_info
                     }
                     yield f"data: {json.dumps(event_data)}\n\n"
 

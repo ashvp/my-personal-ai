@@ -35,3 +35,7 @@ class ChatResponse(BaseModel):
         default=None,
         description="Total duration for the response generation in seconds"
     )
+    explainability: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Detailed explainability evidence including retrieved graph facts, relational paths, and prompt context"
+    )

@@ -47,6 +47,14 @@ class MemoryService:
         """Initializes tables using SQLAlchemy Declarative metadata."""
         try:
             Base.metadata.create_all(bind=self.engine)
+            # Drop legacy secondary ART index on contacts that causes DuckDB index deletion error
+            with self.engine.connect() as conn:
+                for idx in ["ix_contacts_name", "contacts_name_idx"]:
+                    try:
+                        conn.execute(text(f"DROP INDEX IF EXISTS {idx};"))
+                    except Exception:
+                        pass
+                conn.commit()
             logger.info(f"SQLAlchemy DuckDB schema initialized successfully at {self.db_path}")
         except Exception as exc:
             logger.exception(f"Error initializing SQLAlchemy DuckDB schema: {exc}")
@@ -357,29 +365,51 @@ class MemoryService:
         return self.store_contacts_batch(contacts)
 
     def store_contacts_batch(self, contacts: List[Dict[str, Any]]) -> int:
-        """Batch upserts contacts into DuckDB using SQLAlchemy ORM merging."""
+        """Batch upserts contacts into DuckDB using native SQL ON CONFLICT."""
         if not contacts:
             return 0
 
+        clean_contacts = [
+            {
+                "id": str(c.get("id")),
+                "name": str(c.get("name", "Unknown")),
+                "phone_number": str(c.get("phone_number", "")),
+                "source": str(c.get("source", "beeper"))
+            }
+            for c in contacts if c.get("id")
+        ]
+        if not clean_contacts:
+            return 0
+
         session = self.get_session()
-        saved_count = 0
         try:
-            for c in contacts:
-                contact_obj = Contact(
-                    id=c.get("id"),
-                    name=c.get("name", "Unknown"),
-                    phone_number=c.get("phone_number", ""),
-                    source=c.get("source", "beeper")
-                )
-                session.merge(contact_obj)
-                saved_count += 1
+            stmt = text("""
+                INSERT INTO contacts (id, name, phone_number, source, updated_at)
+                VALUES (:id, :name, :phone_number, :source, CURRENT_TIMESTAMP)
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    phone_number = EXCLUDED.phone_number,
+                    source = EXCLUDED.source,
+                    updated_at = CURRENT_TIMESTAMP
+            """)
+            session.execute(stmt, clean_contacts)
             session.commit()
-            logger.info(f"SQLAlchemy batch merged {saved_count} contacts into DuckDB.")
-            return saved_count
+            logger.info(f"Batch upserted {len(clean_contacts)} contacts into DuckDB.")
+            return len(clean_contacts)
         except Exception as exc:
             session.rollback()
-            logger.exception(f"Error in SQLAlchemy store_contacts_batch: {exc}")
+            logger.exception(f"Error in store_contacts_batch: {exc}")
             return 0
+        finally:
+            session.close()
+
+    def get_known_contacts_map(self) -> Dict[str, str]:
+        """Returns a fast map of {phone_number: name} for delta-only contact syncing."""
+        session = self.get_session()
+        try:
+            stmt = select(Contact.phone_number, Contact.name)
+            rows = session.execute(stmt).all()
+            return {r[0]: (r[1] or "") for r in rows if r[0]}
         finally:
             session.close()
 
