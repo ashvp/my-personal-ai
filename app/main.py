@@ -7,13 +7,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.api.v1.endpoints.chat import router as chat_router
+from app.api.v1.endpoints.chat import router as chat_router_v1
 from app.api.v1.endpoints.gmail import router as gmail_router
 from app.api.v1.endpoints.whatsapp import router as whatsapp_router
 from app.api.v1.endpoints.outlook import router as outlook_router
 from app.api.v1.endpoints.sync import router as sync_router
 from app.api.v1.endpoints.sms import router as sms_router
 from app.api.v1.endpoints.contacts import router as contacts_router
+from app.api.v2.endpoints.chat import router as chat_router_v2
+from app.api.v2.endpoints.graph import router as graph_router_v2
 from app.services.background_sync import background_sync_service
 
 # Configure logging
@@ -80,9 +82,8 @@ async def health_check():
     }
 
 
-# Include routers at root and API versioned
-app.include_router(chat_router, tags=["Chat"])
-app.include_router(chat_router, prefix="/api/v1", tags=["Chat (v1)"])
+# --- Version 1.0 Routes (Pure Vector RAG & 3-Tier Cognitive Memory) ---
+app.include_router(chat_router_v1, prefix="/api/v1", tags=["Chat (v1)"])
 app.include_router(gmail_router, tags=["Gmail Sync"])
 app.include_router(gmail_router, prefix="/api/v1", tags=["Gmail Sync (v1)"])
 app.include_router(whatsapp_router, tags=["WhatsApp Sync"])
@@ -95,6 +96,16 @@ app.include_router(sms_router, tags=["SMS Sync"])
 app.include_router(sms_router, prefix="/api/v1", tags=["SMS Sync (v1)"])
 app.include_router(contacts_router, tags=["Contacts & Calling"])
 app.include_router(contacts_router, prefix="/api/v1", tags=["Contacts & Calling (v1)"])
+
+# --- Version 2.0 Routes (Bitemporal Knowledge Graph Engine) ---
+app.include_router(chat_router_v2, prefix="/api/v2", tags=["Chat (v2)"])
+app.include_router(graph_router_v2, prefix="/api/v2", tags=["Knowledge Graph (v2)"])
+
+# Root /chat routes according to configured DEFAULT_API_VERSION (v1 or v2)
+if getattr(settings, "DEFAULT_API_VERSION", "v1") == "v2":
+    app.include_router(chat_router_v2, tags=["Chat (Active v2)"])
+else:
+    app.include_router(chat_router_v1, tags=["Chat (Active v1)"])
 
 # Serve PWA Frontend
 if os.path.exists(FRONTEND_DIR):

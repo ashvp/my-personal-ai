@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy import create_engine, select, or_, update, func, text
 from sqlalchemy.orm import sessionmaker, scoped_session
 
-from app.models.memory import Base, Email, Message, IntermediateMemory, ChatHistory, Contact
+from app.models.memory import Base, Email, Message, IntermediateMemory, ChatHistory, Contact, Entity, TemporalEdge
 
 logger = logging.getLogger(__name__)
 

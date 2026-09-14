@@ -29,6 +29,7 @@ from app.services.llm_service import clean_interpreted_message, extract_followup
 from app.services.contacts_service import format_phone_for_dialer, format_phone_for_whatsapp, ContactsService
 from app.services.memory_service import MemoryService
 from tests.dataset_100_cases import DATASET_105_CASES
+from tests.test_graph_service import TestGraphService
 
 
 class TestMessageSanitization(unittest.TestCase):
@@ -324,6 +325,7 @@ def run_full_benchmark() -> Dict[str, Any]:
     suite.addTests(loader.loadTestsFromTestCase(TestFollowupContinuity))
     suite.addTests(loader.loadTestsFromTestCase(TestMemoryEngineORM))
     suite.addTests(loader.loadTestsFromTestCase(TestTemporalKnowledgeGraphBenchmark))
+    suite.addTests(loader.loadTestsFromTestCase(TestGraphService))
 
     start_time = time.time()
     runner = unittest.TextTestRunner(verbosity=1)

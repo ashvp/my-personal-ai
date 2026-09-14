@@ -24,6 +24,10 @@ localai/
 │   │           ├── chat.py         # Protected POST /chat (SSE streaming by default)
 │   │           ├── gmail.py        # Gmail sync & status endpoints
 │   │           ├── whatsapp.py     # WhatsApp (Beeper) sync & status endpoints
+│   │           ├── sms.py          # Google Messages SMS sync endpoints
+│   │           ├── contacts.py     # Contacts & autonomous dialing endpoints
+│   │           ├── sync.py         # Multi-modal background sync controller
+│   │           ├── graph.py        # Bitemporal Knowledge Graph (V2) REST endpoints
 │   │           └── outlook.py      # Outlook/College mail endpoints (on hold)
 │   ├── schemas/
 │   │   ├── __init__.py
@@ -31,14 +35,17 @@ localai/
 │   └── services/
 │       ├── __init__.py
 │       ├── llm_service.py          # LLM-native action engine, model routing & Ollama stream service
+│       ├── graph_service.py        # Bitemporal Knowledge Graph Engine (V2 - assertions, time-travel, BFS)
 │       ├── contacts_service.py     # Local contacts resolver & autonomous MacroDroid calling/messaging
 │       ├── triage_service.py       # Multi-modal daily briefing cognitive triage (Schedule -> People -> Promos)
 │       ├── memory_service.py       # 3-Tier Cognitive Memory Engine (Working, Episodic, Archive)
+│       ├── background_sync.py      # Non-blocking periodic background sync worker
 │       ├── gmail_service.py        # Gmail API OAuth client & message ingester
 │       ├── whatsapp_service.py     # Beeper SQLite snapshot ingester & contact resolver
+│       ├── sms_service.py          # Beeper SQLite Google Messages SMS snapshot ingester
 │       └── outlook_service.py      # Microsoft Graph API client (College mail integration)
 ├── data/
-│   └── assistant.duckdb            # Local embedded DuckDB database (emails, messages, briefings)
+│   └── assistant.duckdb            # Local DuckDB database (emails, messages, entities, temporal_edges)
 ├── frontend/
 │   ├── index.html                  # Modern responsive chat interface
 │   ├── manifest.json               # PWA configuration for mobile home screen installation
@@ -55,9 +62,13 @@ localai/
 ├── pair.py                         # Device pairing utility (QR code & link generator)
 ├── run.py                          # Application launcher
 ├── run_tests.py                    # 105-Case benchmark & evaluation runner
+├── run_v1_vs_v2_llm_eval.py        # Live Ollama LLM Benchmark (V1 Vector RAG vs V2 Temporal KG)
 ├── tests/
 │   ├── dataset_100_cases.py        # Curated 105-case benchmark evaluation dataset
-│   └── test_v1_comprehensive.py    # Automated test suite computing formal metrics
+│   ├── dataset_v1_vs_v2_benchmarks.py # 25 Ground-truth temporal scenarios
+│   ├── test_v1_comprehensive.py    # Automated test suite computing formal metrics
+│   ├── test_graph_service.py       # V2 DuckDB Temporal Knowledge Graph unit test suite
+│   └── v1_vs_v2_engine.py          # Comparative reference benchmark engines
 ├── LICENSE                         # MIT License
 ├── v2.md                           # Version 2.0 architecture & roadmap specification
 └── README.md
@@ -229,6 +240,12 @@ It will automatically save your token into `localStorage` and clear the token fr
   python run_tests.py
   ```
   Computes 7 formal evaluation metrics across 105 curated test scenarios: Meta-Prefix Strip Rate (MPSR), First-Person Perspective Fidelity (FPPF), Phone Dialer 10-Digit Sanitization Precision (PDSP), Contact Alias Resolution Rate (CARR), Follow-Up Context Extraction Accuracy (FCEA), DuckDB Memory ORM Integrity (MOI), and Temporal Knowledge Graph Benchmark Accuracy (TGBA).
+
+* **Head-to-Head V1 (Vector RAG) vs. V2 (Temporal Knowledge Graph) Benchmark:**
+  ```bash
+  python run_v1_vs_v2_benchmarks.py
+  ```
+  Pits unstructured vector search against the bitemporal knowledge graph across 25 real-world scenarios. Evaluates Temporal Fact Invalidation Precision (TFIP), Point-In-Time Historical Accuracy (PITHA), Multi-Hop Relational Traversal Rate (MHTR), State Contradiction Resolution Rate (SCRR), and Hallucinatory Blending Rate (HBR).
 
 ---
 

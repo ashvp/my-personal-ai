@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Optional, Dict, Any
-from sqlalchemy import String, Text, Boolean, BigInteger, Integer, DateTime, func, Sequence
+from typing import Optional, Dict, Any, List
+from sqlalchemy import String, Text, Boolean, BigInteger, Integer, Float, DateTime, func, Sequence
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -131,5 +131,64 @@ class Contact(Base):
             "name": self.name,
             "phone_number": self.phone_number,
             "source": self.source
+        }
+
+
+# --- Bitemporal Knowledge Graph Models ---
+
+class Entity(Base):
+    __tablename__ = "entities"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, index=True)
+    entity_type: Mapped[str] = mapped_column(String, default="Concept", index=True)
+    aliases: Mapped[Optional[str]] = mapped_column(Text, default="")
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "entity_type": self.entity_type,
+            "aliases": self.aliases,
+            "metadata_json": self.metadata_json,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class TemporalEdge(Base):
+    __tablename__ = "temporal_edges"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    subject: Mapped[str] = mapped_column(String, index=True)
+    predicate: Mapped[str] = mapped_column(String, index=True)
+    object: Mapped[str] = mapped_column(String, index=True)
+    source_id: Mapped[Optional[str]] = mapped_column(String, default="")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    valid_from: Mapped[str] = mapped_column(String, index=True)
+    valid_to: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)  # None indicates CURRENTLY ACTIVE
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp())
+
+    @property
+    def is_active(self) -> bool:
+        return self.valid_to is None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "subject": self.subject,
+            "predicate": self.predicate,
+            "object": self.object,
+            "source_id": self.source_id,
+            "confidence": self.confidence,
+            "valid_from": self.valid_from,
+            "valid_to": self.valid_to,
+            "is_active": self.is_active,
+            "metadata_json": self.metadata_json,
+            "created_at": self.created_at.isoformat() if self.created_at else None
         }
 

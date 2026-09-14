@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # API Versioning & V2 Features
+    DEFAULT_API_VERSION: str = "v1"  # "v1" or "v2"
+    ENABLE_V2_GRAPH: bool = True
+
     # Local LLM (Ollama) Settings
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_MODEL: str = "qwen3.5:2b"

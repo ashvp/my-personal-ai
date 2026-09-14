@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 import httpx
 from app.config import settings
 from app.services.memory_service import memory_service
+from app.services.graph_service import graph_service
 from app.services.whatsapp_service import get_beeper_db_path, DEFAULT_BEEPER_DB_PATH
 
 import urllib.parse
@@ -102,56 +103,119 @@ class ContactsService:
             conn = self._get_sqlite_connection()
             cursor = conn.cursor()
 
-            query = """
-                SELECT DISTINCT 
-                    COALESCE(u.full_name, c.display_name, '') as name,
-                    COALESCE(u.phone_number, '') as phone_number,
-                    c.id as contact_id,
-                    'beeper' as source
-                FROM contacts c
-                LEFT JOIN contact_phones cp ON c.id = cp.contact_id
-                LEFT JOIN users u ON cp.phone_number = u.phone_number
-                WHERE (u.phone_number IS NOT NULL AND u.phone_number != '')
-                   OR (cp.phone_number IS NOT NULL AND cp.phone_number != '')
-            """
-            try:
-                cursor.execute(query)
-                rows = cursor.fetchall()
-            except sqlite3.OperationalError:
-                cursor.execute("""
-                    SELECT DISTINCT 
-                        display_name as name,
-                        phone_number,
-                        id as contact_id,
-                        'beeper' as source
-                    FROM contacts
-                    WHERE phone_number IS NOT NULL AND phone_number != ''
-                """)
-                rows = cursor.fetchall()
+            # Inspect available tables in Beeper SQLite store
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            existing_tables = {row[0].lower() for row in cursor.fetchall()}
 
             contacts_to_index = []
             seen_phones = set()
 
-            for row in rows:
-                name = (row[0] or "").strip()
-                raw_phone = (row[1] or "").strip()
-                contact_id = str(row[2]) if len(row) > 2 else ""
+            # 1. Native Beeper Desktop schema: 'participants' and 'threads'
+            if "participants" in existing_tables:
+                thread_titles = {}
+                if "threads" in existing_tables:
+                    try:
+                        cursor.execute("SELECT threadID, thread FROM threads;")
+                        for tid, traw in cursor.fetchall():
+                            try:
+                                t_data = json.loads(traw) if traw else {}
+                                title = t_data.get("title") or t_data.get("name")
+                                if title and title.strip().lower() not in ("unknown", "null", ""):
+                                    thread_titles[tid] = title.strip()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
 
-                if not name or not raw_phone:
-                    continue
+                cursor.execute("""
+                    SELECT room_id, full_name, nickname, id
+                    FROM participants
+                    WHERE is_self = 0 OR is_self IS NULL;
+                """)
+                for room_id, full_name, nick, user_id in cursor.fetchall():
+                    name = (full_name or nick or "").strip()
+                    if not name and room_id in thread_titles:
+                        name = thread_titles[room_id]
 
-                clean_phone = re.sub(r"[^\d+]", "", raw_phone)
-                if clean_phone in seen_phones:
-                    continue
-                seen_phones.add(clean_phone)
+                    raw_phone = ""
+                    if user_id:
+                        clean_user = user_id.split(":")[0]
+                        for pfx in ["@whatsapp_", "@gmessages_", "@sms_", "@signal_", "@telegram_", "@"]:
+                            clean_user = clean_user.replace(pfx, "")
+                        clean_user = clean_user.replace("lid-", "")
+                        m_phone = re.search(r"(\+?\d{10,15})", clean_user)
+                        if m_phone:
+                            raw_phone = m_phone.group(1)
 
-                contacts_to_index.append({
-                    "id": contact_id or f"cnt_{clean_phone}",
-                    "name": name,
-                    "phone_number": clean_phone,
-                    "normalized_name": name.lower(),
-                    "source": "beeper_contacts"
-                })
+                    # If name is still missing or is just a phone number, fall back to thread title
+                    if (not name or re.sub(r"[^\d]", "", name) == raw_phone) and room_id in thread_titles:
+                        t_title = thread_titles[room_id]
+                        if t_title and not t_title.replace("+", "").isdigit():
+                            name = t_title
+
+                    if not name and raw_phone:
+                        name = f"+{raw_phone.lstrip('+')}"
+
+                    if name and raw_phone:
+                        clean_phone = format_phone_for_dialer(raw_phone)
+                        if clean_phone and clean_phone not in seen_phones:
+                            seen_phones.add(clean_phone)
+                            contacts_to_index.append({
+                                "id": f"cnt_{clean_phone}",
+                                "name": name,
+                                "phone_number": clean_phone,
+                                "normalized_name": name.lower(),
+                                "source": "beeper_contacts"
+                            })
+
+            # 2. Legacy / alternative Beeper schema with 'contacts' table
+            elif "contacts" in existing_tables:
+                try:
+                    cursor.execute("""
+                        SELECT DISTINCT 
+                            COALESCE(u.full_name, c.display_name, '') as name,
+                            COALESCE(u.phone_number, '') as phone_number,
+                            c.id as contact_id,
+                            'beeper' as source
+                        FROM contacts c
+                        LEFT JOIN contact_phones cp ON c.id = cp.contact_id
+                        LEFT JOIN users u ON cp.phone_number = u.phone_number
+                        WHERE (u.phone_number IS NOT NULL AND u.phone_number != '')
+                           OR (cp.phone_number IS NOT NULL AND cp.phone_number != '')
+                    """)
+                    rows = cursor.fetchall()
+                except sqlite3.OperationalError:
+                    cursor.execute("""
+                        SELECT DISTINCT 
+                            display_name as name,
+                            phone_number,
+                            id as contact_id,
+                            'beeper' as source
+                        FROM contacts
+                        WHERE phone_number IS NOT NULL AND phone_number != ''
+                    """)
+                    rows = cursor.fetchall()
+
+                for row in rows:
+                    name = (row[0] or "").strip()
+                    raw_phone = (row[1] or "").strip()
+                    contact_id = str(row[2]) if len(row) > 2 else ""
+
+                    if not name or not raw_phone:
+                        continue
+
+                    clean_phone = format_phone_for_dialer(raw_phone)
+                    if clean_phone in seen_phones:
+                        continue
+                    seen_phones.add(clean_phone)
+
+                    contacts_to_index.append({
+                        "id": contact_id or f"cnt_{clean_phone}",
+                        "name": name,
+                        "phone_number": clean_phone,
+                        "normalized_name": name.lower(),
+                        "source": "beeper_contacts"
+                    })
 
             conn.close()
 
@@ -159,12 +223,38 @@ class ContactsService:
                 memory_service.index_contacts(contacts_to_index)
                 logger.info(f"Synchronized and indexed {len(contacts_to_index)} contacts from Beeper into DuckDB.")
 
+                # Assert into Temporal Knowledge Graph (V2)
+                if getattr(settings, "ENABLE_V2_GRAPH", True):
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    for c in contacts_to_index:
+                        c_name = c.get("name")
+                        c_phone = c.get("phone_number")
+                        if c_name and not c_name.startswith("+"):
+                            try:
+                                graph_service.assert_fact(
+                                    subject="Ashwin",
+                                    predicate="KNOWS",
+                                    object=c_name,
+                                    valid_from=today_str,
+                                    is_terminal_mutation=False
+                                )
+                                if c_phone:
+                                    graph_service.assert_fact(
+                                        subject=c_name,
+                                        predicate="PRIMARY_PHONE",
+                                        object=c_phone,
+                                        valid_from=today_str,
+                                        is_terminal_mutation=True
+                                    )
+                            except Exception as c_g_exc:
+                                logger.debug(f"Error asserting contact {c_name} to graph: {c_g_exc}")
+
             return {
                 "success": True,
                 "count": len(contacts_to_index),
                 "synced_count": len(contacts_to_index),
                 "named_contacts": len(contacts_to_index),
-                "message": f"Successfully indexed {len(contacts_to_index)} contacts."
+                "message": f"Successfully indexed {len(contacts_to_index)} contacts from Beeper."
             }
 
         except Exception as exc:

@@ -7,7 +7,9 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Set
 
+from app.config import settings
 from app.services.memory_service import memory_service
+from app.services.graph_service import graph_service
 from app.services.whatsapp_service import get_beeper_db_path, DEFAULT_BEEPER_DB_PATH
 
 logger = logging.getLogger(__name__)
@@ -194,6 +196,19 @@ class SMSService:
             # 4. Store in DuckDB via SQLAlchemy ORM
             memory_service.store_messages_batch(records)
             logger.info(f"Ingested {len(records)} Google SMS messages into DuckDB.")
+
+            # 4b. Extract and assert temporal graph facts (V2)
+            if getattr(settings, "ENABLE_V2_GRAPH", True):
+                try:
+                    for r in records:
+                        if r.get("content"):
+                            graph_service.extract_and_assert_from_text(
+                                text=r["content"],
+                                date_str=r.get("date_str") or datetime.now().strftime("%Y-%m-%d"),
+                                source_id=r.get("id")
+                            )
+                except Exception as g_exc:
+                    logger.warning(f"Error extracting graph facts from SMS batch: {g_exc}")
 
             # 5. Update Working Memory
             for contact_name, item in working_by_thread.items():

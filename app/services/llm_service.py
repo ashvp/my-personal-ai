@@ -11,6 +11,7 @@ from app.schemas.chat import ChatResponse
 from app.services.memory_service import memory_service
 from app.services.triage_service import triage_service
 from app.services.contacts_service import contacts_service
+from app.services.graph_service import graph_service
 
 logger = logging.getLogger(__name__)
 
@@ -419,9 +420,12 @@ class OllamaLLMService:
         prompt: str,
         intent: str,
         system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        version: str = "v1"
     ) -> tuple[str, str, float]:
-        """Prepares destination model, focused system prompt, and temperature based on intent."""
+        """Prepares destination model, focused system prompt, and temperature based on intent and version (v1 or v2)."""
+        use_graph = (version == "v2") and getattr(settings, "ENABLE_V2_GRAPH", True)
+        graph_context = graph_service.format_graph_context_for_query(prompt) if use_graph else ""
 
         # 1. DAILY_BRIEFING: Intelligent multi-modal cognitive triage (Schedule -> People -> Promos)
         if intent == "DAILY_BRIEFING":
@@ -458,18 +462,30 @@ class OllamaLLMService:
                 )
             context = "\n".join(msg_lines) if msg_lines else "No matching messages found in database."
 
-            sys_prompt = (
-                "You are a personal AI chat assistant. The user is asking about their WhatsApp messages and conversations.\n"
-                "Here is the verified message data retrieved from their local database:\n\n"
-                f"{context}\n\n"
-                "Instructions:\n"
-                "1. Answer the user's question directly and concisely based ONLY on the messages above.\n"
-                "2. Explicitly note who sent the message, the contact/group name, and the timestamp.\n"
-                "3. Be concise, direct, and factual."
-            )
+            if use_graph and graph_context:
+                sys_prompt = (
+                    "You are a personal AI chat assistant. The user is asking about their WhatsApp messages and conversations.\n\n"
+                    f"{graph_context}\n\n"
+                    "Here is the message data retrieved from their local database:\n\n"
+                    f"{context}\n\n"
+                    "Instructions:\n"
+                    "1. Answer the user's question directly and concisely based on the verified graph and message data above.\n"
+                    "2. Prioritize verified temporal graph facts above outdated message snippets.\n"
+                    "3. Be concise, direct, and factual."
+                )
+            else:
+                sys_prompt = (
+                    "You are a personal AI chat assistant. The user is asking about their WhatsApp messages and conversations.\n"
+                    "Here is the verified message data retrieved from their local database:\n\n"
+                    f"{context}\n\n"
+                    "Instructions:\n"
+                    "1. Answer the user's question directly and concisely based ONLY on the messages above.\n"
+                    "2. Explicitly note who sent the message, the contact/group name, and the timestamp.\n"
+                    "3. Be concise, direct, and factual."
+                )
             return model, sys_prompt, temp
 
-        # 2. EMAIL_LOOKUP: Query DuckDB and use Fast Model
+        # 3. EMAIL_LOOKUP: Query DuckDB and use Fast Model
         if intent == "EMAIL_LOOKUP":
             model = self.fast_model
             temp = 0.2  # Low temperature for strict factual accuracy
@@ -508,7 +524,7 @@ class OllamaLLMService:
             )
             return model, sys_prompt, temp
 
-        # 2. DEEP_REASON: Complex logic/analysis using Reasoning Model
+        # 4. DEEP_REASON: Complex logic/analysis using Reasoning Model
         elif intent == "DEEP_REASON":
             model = self.reasoning_model
             temp = temperature if temperature is not None else 0.6
@@ -519,16 +535,20 @@ class OllamaLLMService:
                     "Analyze the user's problem thoroughly and logically, considering constraints, trade-offs, and edge cases before providing your conclusion."
                 )
             ]
+            if use_graph and graph_context:
+                parts.append(graph_context)
             if intermediate_context:
                 parts.append(intermediate_context)
             return model, "\n\n".join(parts), temp
 
-        # 3. FAST_CHAT: Quick general chat, drafting, summarization using Fast Model
+        # 5. FAST_CHAT: Quick general chat, drafting, summarization using Fast Model
         else:
             model = self.fast_model
             temp = temperature if temperature is not None else self.temperature
             intermediate_context = memory_service.get_intermediate_context()
             parts = [system_prompt or self.system_prompt]
+            if use_graph and graph_context:
+                parts.append(graph_context)
             if intermediate_context:
                 parts.append(intermediate_context)
             return model, "\n\n".join(parts), temp
@@ -567,7 +587,8 @@ class OllamaLLMService:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
-        history: Optional[List[Dict[str, str]]] = None
+        history: Optional[List[Dict[str, str]]] = None,
+        version: Optional[str] = None
     ) -> ChatResponse:
         """Blocking reply method with dynamic action resolution and conversation memory."""
         action_data = await self.resolve_action(prompt, history)
@@ -613,8 +634,9 @@ class OllamaLLMService:
         intent = action_to_intent.get(action, "FAST_CHAT")
         lookup_prompt = query_text if (action in ("message_lookup", "email_lookup") and query_text) else prompt
 
+        active_version = version or getattr(settings, "DEFAULT_API_VERSION", "v1")
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
-            lookup_prompt, intent, system_prompt, temperature
+            lookup_prompt, intent, system_prompt, temperature, version=active_version
         )
 
         payload = self._build_payload(
@@ -691,7 +713,8 @@ class OllamaLLMService:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
-        history: Optional[List[Dict[str, str]]] = None
+        history: Optional[List[Dict[str, str]]] = None,
+        version: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """Real-time SSE token stream generator with dynamic action resolution and conversation memory."""
         action_data = await self.resolve_action(prompt, history)
@@ -739,8 +762,9 @@ class OllamaLLMService:
         intent = action_to_intent.get(action, "FAST_CHAT")
         lookup_prompt = query_text if (action in ("message_lookup", "email_lookup") and query_text) else prompt
 
+        active_version = version or getattr(settings, "DEFAULT_API_VERSION", "v1")
         target_model, routed_sys_prompt, temp = self._prepare_routed_execution(
-            lookup_prompt, intent, system_prompt, temperature
+            lookup_prompt, intent, system_prompt, temperature, version=active_version
         )
 
         payload = self._build_payload(

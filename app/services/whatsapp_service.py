@@ -7,7 +7,9 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+from app.config import settings
 from app.services.memory_service import memory_service
+from app.services.graph_service import graph_service
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +220,19 @@ class WhatsAppService:
             # 3. Store batch into DuckDB
             memory_service.store_messages_batch(records)
             logger.info(f"Ingested {len(records)} WhatsApp messages into DuckDB.")
+
+            # 3b. Extract and assert temporal graph facts (V2)
+            if getattr(settings, "ENABLE_V2_GRAPH", True):
+                try:
+                    for r in records:
+                        if r.get("content"):
+                            graph_service.extract_and_assert_from_text(
+                                text=r["content"],
+                                date_str=r.get("date_str") or datetime.now().strftime("%Y-%m-%d"),
+                                source_id=r.get("id")
+                            )
+                except Exception as g_exc:
+                    logger.warning(f"Error extracting graph facts from WhatsApp batch: {g_exc}")
 
             # 4. Update Working Memory (Intermediate Memory) with active chats from today/yesterday
             for thread_title, item in working_by_thread.items():
