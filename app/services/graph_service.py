@@ -694,10 +694,16 @@ class GraphService:
         finally:
             session.close()
 
-        matched_entities = [
-            ent for ent in all_entities
-            if ent.lower() in lower_q and len(ent) > 2
-        ]
+        seen_entities = set()
+        matched_entities = []
+        for ent in all_entities:
+            if not ent:
+                continue
+            ent_clean = ent.strip()
+            ent_low = ent_clean.lower()
+            if len(ent_clean) > 2 and ent_low in lower_q and ent_low not in seen_entities:
+                seen_entities.add(ent_low)
+                matched_entities.append(ent_clean)
 
         if not matched_entities:
             # If no direct entity matched, return empty string
@@ -705,16 +711,18 @@ class GraphService:
 
         facts_lines = []
 
-        # Check for multi-hop path query (e.g. "How do I know X?", "What is my relationship with X?")
+        # Check for multi-hop path query (e.g. "How do I know X?", "What is my relationship with X?", "Who is X to me?")
         rel_triggers = [
             "how do i know", "connected to", "connection", "introduce", "who is",
             "relationship", "relation", "related", "how do we know", "do i know",
-            "friend", "colleague", "contact"
+            "friend", "colleague", "contact", "to me"
         ]
         if any(w in lower_q for w in rel_triggers):
             for ent in matched_entities:
-                if ent.lower() != "ashwin":
+                if ent.lower() not in ("ashwin", "ashwin v"):
                     path = self.traverse_network("Ashwin", ent, max_depth=4, target_date=target_date)
+                    if not path:
+                        path = self.traverse_network("Ashwin V", ent, max_depth=4, target_date=target_date)
                     if path:
                         steps = ["Ashwin"]
                         for step in path:
@@ -756,6 +764,9 @@ class GraphService:
                         f"(Active since: {e['valid_from']})"
                     )
 
+        # Deduplicate facts lines preserving order
+        facts_lines = list(dict.fromkeys(facts_lines))
+
         if not facts_lines:
             return ""
 
@@ -765,8 +776,11 @@ class GraphService:
         ]
         output.extend(facts_lines)
         output.append("Instructions:")
-        output.append("1. Prioritize these verified facts above general knowledge or ambiguous message snippets.")
-        output.append("2. When asked about personal relationships or how the user knows someone, rely strictly on the verified relational paths and edges above. Do not guess or extrapolate familial relationships from casual chat messages.")
+        output.append("1. CRITICAL IDENTITY: The user you are speaking with is Ashwin (full name Ashwin V).")
+        output.append("2. Any facts stating 'Ashwin KNOWS X' or 'Ashwin --[KNOWS]--> X' mean that YOU (the user, Ashwin V) know X as a direct contact in your phone/address book.")
+        output.append("3. Always address the user directly as 'you'. Never refer to Ashwin in the third person or say 'Ashwin knows X, but your relationship is unknown'.")
+        output.append("4. When asked 'Who is X to me?' or 'What is my relationship with X?', state clearly that X is your contact according to your verified personal knowledge graph.")
+        output.append("5. Prioritize these verified graph facts above ambiguous chat messages or conversational snippets.")
         output.append("---------------------------------------------------------")
         return "\n".join(output)
 
@@ -804,22 +818,33 @@ class GraphService:
         finally:
             session.close()
 
-        matched_entities = [
-            ent for ent in all_entities
-            if ent.lower() in lower_q and len(ent) > 2
-        ]
+        seen_entities = set()
+        matched_entities = []
+        for ent in all_entities:
+            if not ent:
+                continue
+            ent_clean = ent.strip()
+            ent_low = ent_clean.lower()
+            if len(ent_clean) > 2 and ent_low in lower_q and ent_low not in seen_entities:
+                seen_entities.add(ent_low)
+                matched_entities.append(ent_clean)
 
         rel_paths = []
         for ent in matched_entities:
-            if ent.lower() != "ashwin":
+            if ent.lower() not in ("ashwin", "ashwin v"):
                 path = self.traverse_network("Ashwin", ent, max_depth=4)
+                if not path:
+                    path = self.traverse_network("Ashwin V", ent, max_depth=4)
                 if path:
                     steps = ["Ashwin"]
                     for step in path:
                         steps.append(f"--[{step['predicate']}]--> {step['object']}")
                     rel_paths.append(" ".join(steps))
 
+        rel_paths = list(dict.fromkeys(rel_paths))
+
         facts = []
+        seen_fact_keys = set()
         for ent in matched_entities:
             outgoing = self.query_active_facts(subject=ent)
             incoming = self.query_active_facts(object=ent)
@@ -827,12 +852,15 @@ class GraphService:
             for e in outgoing + incoming:
                 if e["id"] not in seen_ids:
                     seen_ids.add(e["id"])
-                    facts.append({
-                        "subject": e["subject"],
-                        "predicate": e["predicate"],
-                        "object": e["object"],
-                        "valid_from": e["valid_from"]
-                    })
+                    fact_key = (e["subject"].lower(), e["predicate"].upper(), e["object"].lower())
+                    if fact_key not in seen_fact_keys:
+                        seen_fact_keys.add(fact_key)
+                        facts.append({
+                            "subject": e["subject"],
+                            "predicate": e["predicate"],
+                            "object": e["object"],
+                            "valid_from": e["valid_from"]
+                        })
 
         return {
             "matched_entities": matched_entities,

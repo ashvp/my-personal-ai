@@ -531,7 +531,8 @@ class OllamaLLMService:
             intermediate_context = memory_service.get_intermediate_context()
             parts = [
                 system_prompt or (
-                    "You are an expert analytical AI assistant. "
+                    "You are an expert analytical AI assistant for Ashwin V. "
+                    "The user speaking with you is Ashwin V. "
                     "Analyze the user's problem thoroughly and logically, considering constraints, trade-offs, and edge cases before providing your conclusion."
                 )
             ]
@@ -539,8 +540,25 @@ class OllamaLLMService:
                 parts.append(graph_context)
             if intermediate_context:
                 if use_graph and graph_context:
-                    query_words = set(re.findall(r"\w+", prompt.lower())) - {"what", "is", "my", "the", "a", "an", "with", "to", "who", "how", "do", "i", "of"}
-                    filtered_lines = [line for line in intermediate_context.split("\n") if any(w in line.lower() for w in query_words)]
+                    stop_words = {
+                        "what", "is", "my", "the", "a", "an", "with", "to", "who", "whom",
+                        "whose", "how", "do", "does", "did", "i", "of", "me", "you", "your",
+                        "for", "in", "on", "at", "about", "are", "was", "were", "be", "been",
+                        "have", "has", "had", "and", "or", "tell", "say", "know", "relationship",
+                        "relation", "related", "between"
+                    }
+                    query_words = {
+                        w for w in re.findall(r"\b[a-zA-Z0-9_]+\b", prompt.lower())
+                        if w not in stop_words and len(w) > 2
+                    }
+                    filtered_lines = []
+                    if query_words:
+                        for line in intermediate_context.split("\n"):
+                            line_clean = line.strip()
+                            if not line_clean:
+                                continue
+                            if any(re.search(rf"\b{re.escape(w)}\b", line_clean, re.IGNORECASE) for w in query_words):
+                                filtered_lines.append(line_clean)
                     if filtered_lines:
                         parts.append("--- RECENT COMMUNICATIONS ---\n" + "\n".join(filtered_lines) + "\n-----------------------------")
                 else:
@@ -557,8 +575,25 @@ class OllamaLLMService:
                 parts.append(graph_context)
             if intermediate_context:
                 if use_graph and graph_context:
-                    query_words = set(re.findall(r"\w+", prompt.lower())) - {"what", "is", "my", "the", "a", "an", "with", "to", "who", "how", "do", "i", "of"}
-                    filtered_lines = [line for line in intermediate_context.split("\n") if any(w in line.lower() for w in query_words)]
+                    stop_words = {
+                        "what", "is", "my", "the", "a", "an", "with", "to", "who", "whom",
+                        "whose", "how", "do", "does", "did", "i", "of", "me", "you", "your",
+                        "for", "in", "on", "at", "about", "are", "was", "were", "be", "been",
+                        "have", "has", "had", "and", "or", "tell", "say", "know", "relationship",
+                        "relation", "related", "between"
+                    }
+                    query_words = {
+                        w for w in re.findall(r"\b[a-zA-Z0-9_]+\b", prompt.lower())
+                        if w not in stop_words and len(w) > 2
+                    }
+                    filtered_lines = []
+                    if query_words:
+                        for line in intermediate_context.split("\n"):
+                            line_clean = line.strip()
+                            if not line_clean:
+                                continue
+                            if any(re.search(rf"\b{re.escape(w)}\b", line_clean, re.IGNORECASE) for w in query_words):
+                                filtered_lines.append(line_clean)
                     if filtered_lines:
                         parts.append("--- RECENT COMMUNICATIONS ---\n" + "\n".join(filtered_lines) + "\n-----------------------------")
                 else:
